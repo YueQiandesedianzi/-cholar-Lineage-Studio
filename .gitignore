@@ -1,0 +1,28 @@
+# 本地 SQLite 数据库与日志
+web/*.db
+web/*.db-*
+web/*.sqlite
+web/*.sqlite3
+web/*.sqlite-*
+
+# Python 缓存
+__pycache__/
+*.py[cod]
+
+# 生成的分发文件
+/dist/
+*.zip
+
+# 本机凭据与编辑器文件
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials.json
+.secrets/
+.DS_Store
+Thumbs.db
+
+# 临时登录与上传工具（不进入源码仓库）
+_tools/

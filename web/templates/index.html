@@ -1,0 +1,597 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Σcholar Lineage Studio</title>
+<style>
+  :root { --blue:#2563eb; --amber:#f59e0b; --green:#16a34a; --red:#dc2626; --gray:#64748b; --line:#e2e8f0; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: "Segoe UI","Microsoft YaHei",system-ui,sans-serif; color:#0f172a; background:#f8fafc; }
+  header { background:#0f172a; color:#fff; padding:14px 22px; display:flex; align-items:baseline; gap:14px; }
+  header h1 { margin:0; font-size:20px; }
+  header .tag { font-size:12px; color:#94a3b8; }
+  nav { display:flex; gap:4px; padding:10px 22px; background:#fff; border-bottom:1px solid var(--line); }
+  nav button { border:1px solid transparent; background:transparent; padding:8px 16px; font-size:14px; cursor:pointer; border-radius:8px; color:#334155; }
+  nav button.active { background:#eff6ff; color:var(--blue); border-color:#bfdbfe; font-weight:600; }
+  main { padding:20px 22px; max-width:1440px; margin:0 auto; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(330px,1fr)); gap:16px; }
+  .grid .card { min-width:0; }
+  .actions { display:flex; gap:8px; flex-wrap:wrap; margin:8px 0; }
+  pre.code { background:#0f172a; color:#e2e8f0; padding:10px; border-radius:6px; overflow:auto; max-height:300px; white-space:pre-wrap; word-break:break-word; font-size:12px; }
+  .three { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:8px; }
+  .three pre { min-height:72px; margin:4px 0; }
+  .badge.open { background:#dbeafe; color:#1e40af; }
+  .badge.approved,.badge.merged { background:#dcfce7; color:#166534; }
+  .badge.needs_changes,.badge.conflict { background:#fee2e2; color:#991b1b; }
+  .badge.closed { background:#e2e8f0; color:#475569; }
+  button:disabled { opacity:.5; cursor:not-allowed; }
+  .commit { border-left:3px solid #bfdbfe; padding:6px 10px; margin:8px 0; }
+  .scroll { max-height:420px; overflow:auto; }
+  label.field { display:block; margin:10px 0 4px; font-size:12px; color:#475569; }
+  @media (max-width:700px) { .three { grid-template-columns:1fr; } }
+  .panel { display:none; }
+  .panel.active { display:block; }
+  .card { background:#fff; border:1px solid var(--line); border-radius:10px; padding:16px; margin-bottom:16px; }
+  .card h2 { margin:0 0 12px; font-size:16px; }
+  .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-bottom:10px; }
+  input, textarea, select { border:1px solid #cbd5e1; border-radius:6px; padding:7px 10px; font-size:14px; font-family:inherit; }
+  input[type=text], textarea { width:100%; }
+  textarea { min-height:70px; resize:vertical; }
+  button.primary { background:var(--blue); color:#fff; border:none; padding:8px 16px; border-radius:6px; cursor:pointer; font-size:14px; }
+  button.small { background:#fff; border:1px solid #cbd5e1; padding:4px 10px; border-radius:6px; cursor:pointer; font-size:12px; }
+  button.ok { color:var(--green); border-color:#bbf7d0; background:#f0fdf4; }
+  button.bad { color:var(--red); border-color:#fecaca; background:#fef2f2; }
+  button.warn { color:var(--amber); border-color:#fde68a; background:#fffbeb; }
+  table { width:100%; border-collapse:collapse; background:#fff; }
+  th, td { text-align:left; padding:8px 10px; border-bottom:1px solid var(--line); font-size:13px; vertical-align:top; }
+  th { background:#f8fafc; color:#475569; font-weight:600; }
+  .badge { display:inline-block; padding:2px 8px; border-radius:999px; font-size:11px; }
+  .badge.pending { background:#fef3c7; color:#92400e; }
+  .badge.verified { background:#dcfce7; color:#166534; }
+  .badge.rejected { background:#fee2e2; color:#991b1b; }
+  .muted { color:var(--gray); font-size:12px; }
+  .section-item { display:flex; align-items:center; gap:8px; padding:6px 0; border-bottom:1px dashed var(--line); }
+  .section-item .title { flex:1; }
+  .hint { background:#f1f5f9; border-left:3px solid #94a3b8; padding:8px 12px; font-size:12px; color:#475569; border-radius:0 6px 6px 0; margin-bottom:12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Σcholar Lineage Studio</h1>
+  <span class="tag">导入 → 提取 → 核验 → 框架 → 分支/审核/合并/版本 · AI 提取为 Mock</span>
+</header>
+<nav>
+  <button data-tab="papers" class="active">文献</button>
+  <button data-tab="templates">提取模板</button>
+  <button data-tab="extract">提取与核验</button>
+  <button data-tab="outline">综述框架</button>
+  <button data-tab="collaboration">协作与版本</button>
+</nav>
+<main>
+  <!-- 文献 -->
+  <section id="papers" class="panel active">
+    <div class="card">
+      <h2>导入文献（标题 + 摘要）</h2>
+      <div class="hint">MVP 以"摘要"作为可抽取全文；摘录字段保证是摘要的真实子串。</div>
+      <div class="row"><input id="p-title" placeholder="标题"></div>
+      <div class="row"><input id="p-authors" placeholder="作者（可选）"><input id="p-year" placeholder="年份（可选）" style="width:120px"><input id="p-doi" placeholder="DOI（可选）" style="width:220px"></div>
+      <div class="row"><textarea id="p-abstract" placeholder="摘要正文"></textarea></div>
+      <div class="row"><button class="primary" onclick="addPaper()">导入</button></div>
+    </div>
+    <div class="card"><h2>文献列表</h2><div id="paper-list"></div></div>
+  </section>
+
+  <!-- 模板 -->
+  <section id="templates" class="panel">
+    <div class="card">
+      <h2>新建提取模板</h2>
+      <div class="hint">字段用逗号分隔，例如：研究问题, 方法, 样本量, 主要发现。模板可自定义、可切换生效。</div>
+      <div class="row"><input id="tpl-name" placeholder="模板名"></div>
+      <div class="row"><input id="tpl-fields" placeholder="字段（逗号分隔）"></div>
+      <div class="row"><button class="primary" onclick="addTemplate()">创建</button></div>
+    </div>
+    <div class="card"><h2>模板列表</h2><div id="tpl-list"></div></div>
+  </section>
+
+  <!-- 提取与核验 -->
+  <section id="extract" class="panel">
+    <div class="card">
+      <h2>选择文献与模板并提取</h2>
+      <div class="row">
+        <select id="e-paper" style="flex:1"></select>
+        <select id="e-template" style="flex:1"></select>
+        <button class="primary" onclick="runExtract()">提取证据卡片</button>
+      </div>
+    </div>
+    <div class="card"><h2>证据卡片（核验：通过 / 驳回 / 修订）</h2><div id="card-list"><span class="muted">尚未提取。</span></div></div>
+  </section>
+
+  <!-- 综述框架 -->
+  <section id="outline" class="panel">
+    <div class="card">
+      <h2>综述初步框架（章节树）</h2>
+      <div class="row">
+        <input id="s-title" placeholder="新章节标题" style="flex:1">
+        <button class="primary" onclick="addSection()">添加章节</button>
+        <button class="small warn" onclick="suggestSections()">AI 建议框架</button>
+      </div>
+      <div id="section-list"></div>
+    </div>
+    <div class="card"><h2>章节下的卡片</h2><div id="section-cards"><span class="muted">点击左侧章节查看其绑定的卡片。</span></div></div>
+  </section>
+
+  <!-- Git 式协作与版本 -->
+  <section id="collaboration" class="panel">
+    <div class="hint">ChangeUnit 保存字段级差异与完整不可变快照。分支提交不会提前改动主干，审核通过并合并后才更新主干卡片。删除与回滚均产生新提交，不抹除历史。</div>
+    <div class="hint">本地单项目演示：作者与审核人是留痕文本，并非登录鉴权。合并主干时会检查「已核验」卡片的摘录确为论文原文子串。</div>
+    <div class="grid">
+      <div class="card">
+        <h2>1. 分支与提交</h2>
+        <label class="field" for="g-branch">工作分支</label>
+        <select id="g-branch" style="width:100%" onchange="guard(() => loadBranch())"></select>
+        <div id="g-branch-info" class="muted" style="margin:8px 0"></div>
+        <label class="field" for="g-author">作者</label>
+        <input id="g-author" value="协作者" placeholder="提交作者">
+        <div class="row" style="margin-top:12px">
+          <input id="g-card" type="hidden">
+          <select id="g-card-unit" style="flex:1" onchange="fillCardUnit()"></select>
+          <button class="small" onclick="guard(loadBranch)">重新读取</button>
+        </div>
+        <textarea id="g-card-value" placeholder="选择一张卡片，修订其论断"></textarea>
+        <button class="primary" onclick="guard(commitCard)">提交论断修订</button>
+        <hr style="border:0;border-top:1px solid var(--line);margin:16px 0">
+        <div class="row"><select id="g-section-unit" style="flex:1" onchange="fillSectionUnit()"></select></div>
+        <input id="g-section-value" placeholder="章节标题">
+        <button class="small" style="margin-top:8px" onclick="guard(commitSection)">提交章节修订</button>
+      </div>
+      <div class="card">
+        <h2>新建分支</h2>
+        <div class="row"><input id="g-new-name" placeholder="例如：zhangsan-methods"><select id="g-new-kind"><option value="person">个人</option><option value="topic">主题</option><option value="section">章节</option></select></div>
+        <div class="row"><input id="g-new-owner" value="张三" placeholder="负责人"><input id="g-new-purpose" placeholder="用途（必填）"></div>
+        <button class="primary" onclick="guard(createBranch)">从主干当前版本创建</button>
+        <h2 style="margin-top:20px">主干提交历史</h2>
+        <div id="g-history" class="scroll"></div>
+      </div>
+    </div>
+    <div class="grid">
+      <div class="card">
+        <h2>2. 发起合并请求</h2>
+        <p class="muted">源分支使用上方选择的工作分支，默认目标为 main。</p>
+        <select id="g-target" style="width:100%;margin-bottom:10px"></select>
+        <input id="g-mr-title" placeholder="合并请求标题">
+        <button class="primary" style="margin-top:10px" onclick="guard(openMergeRequest)">发起合并请求</button>
+        <label class="field" for="g-mr-select">合并请求</label>
+        <div class="row"><select id="g-mr-select" style="flex:1" onchange="guard(() => showMergeRequest())"></select><button class="small" onclick="guard(loadMergeRequests)">刷新</button></div>
+        <div id="g-mr-summary" class="muted">暂无合并请求。</div>
+      </div>
+      <div class="card">
+        <h2>3. 评论、审核与合并</h2>
+        <label class="field" for="g-reviewer">审核人（不可自我批准）</label>
+        <input id="g-reviewer" value="李老师" placeholder="审核人">
+        <input id="g-comment-unit" placeholder="内联评论 unit_key（例如 card_attr:1:claim）">
+        <textarea id="g-comment-body" placeholder="定位到具体单元的意见（可选）"></textarea>
+        <div class="actions">
+          <button class="small ok" onclick="guard(() => reviewMergeRequest('approve'))">批准</button>
+          <button class="small warn" onclick="guard(() => reviewMergeRequest('request_changes'))">要求修改</button>
+          <button class="small" onclick="guard(refreshMergeRequest)">重新检测冲突</button>
+        </div>
+        <label class="field" for="g-mr-actor">冲突解决 / 合并操作人</label>
+        <div class="row"><input id="g-mr-actor" value="项目负责人"><button class="primary" onclick="guard(mergeMergeRequest)">合并到目标分支</button></div>
+        <div id="g-reviews"></div>
+      </div>
+    </div>
+    <div class="card"><h2>三方预览与冲突解决</h2><div id="g-preview"><span class="muted">选择合并请求查看。</span></div></div>
+    <div class="grid">
+      <div class="card"><h2>4. 版本标签</h2><div class="row"><input id="g-tag-name" placeholder="v1.0"><input id="g-tag-author" value="项目负责人" placeholder="创建人"><button class="primary" onclick="guard(createTag)">标记主干当前版本</button></div><div id="g-tags"></div></div>
+      <div class="card"><h2>历史快照</h2><div id="g-tag-detail"><span class="muted">点击版本标签查看该提交的完整单元快照。</span></div></div>
+    </div>
+  </section>
+</main>
+
+<script>
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+// tabs
+document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('nav button').forEach(x => x.classList.remove('active'));
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+  b.classList.add('active');
+  $('#' + b.dataset.tab).classList.add('active');
+  if (b.dataset.tab === 'papers') loadPapers();
+  if (b.dataset.tab === 'templates') loadTemplates();
+  if (b.dataset.tab === 'extract') { loadPapers(); loadTemplates(); loadCards(); }
+  if (b.dataset.tab === 'outline') { loadSections(); }
+  if (b.dataset.tab === 'collaboration') { guard(loadCollaboration); }
+});
+
+async function api(path, opts = {}) {
+  const r = await fetch(path, { headers: {'Content-Type':'application/json'}, ...opts });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.error || ('HTTP ' + r.status));
+  return data;
+}
+
+// ---- 文献 ----
+async function loadPapers() {
+  const ps = await api('/api/papers');
+  $('#paper-list').innerHTML = ps.length ? ps.map(p => `
+    <div class="section-item"><span class="title"><b>#${p.id}</b> ${esc(p.title)}</span>
+      <span class="muted">${esc(p.year||'')}</span></div>`).join('') : '<span class="muted">暂无文献。</span>';
+  const sel = $('#e-paper');
+  sel.innerHTML = ps.map(p => `<option value="${p.id}">#${p.id} ${esc(p.title)}</option>`).join('');
+}
+async function addPaper() {
+  try {
+    await api('/api/papers', { method:'POST', body: JSON.stringify({
+      title: $('#p-title').value, authors: $('#p-authors').value,
+      year: $('#p-year').value, doi: $('#p-doi').value, abstract: $('#p-abstract').value }) });
+    $('#p-title').value = $('#p-authors').value = $('#p-year').value = $('#p-doi').value = $('#p-abstract').value = '';
+    loadPapers();
+  } catch(e) { alert(e.message); }
+}
+
+// ---- 模板 ----
+async function loadTemplates() {
+  const ts = await api('/api/templates');
+  $('#tpl-list').innerHTML = ts.length ? ts.map(t => `
+    <div class="section-item">
+      <span class="title"><b>${esc(t.name)}</b> ${t.is_active ? '<span class="badge verified">生效中</span>' : ''}
+        <span class="muted">字段：${esc(t.schema.fields.map(f=>f.name).join('、'))}</span></span>
+      ${!t.is_active ? `<button class="small" onclick="activateTpl(${t.id})">设为生效</button>` : ''}
+    </div>`).join('') : '<span class="muted">暂无模板。</span>';
+  $('#e-template').innerHTML = ts.map(t => `<option value="${t.id}">${esc(t.name)}${t.is_active?'（生效）':''}</option>`).join('');
+}
+async function addTemplate() {
+  try {
+    const fields = $('#tpl-fields').value.split(/[,，]/).map(s=>s.trim()).filter(Boolean);
+    await api('/api/templates', { method:'POST', body: JSON.stringify({ name: $('#tpl-name').value, fields }) });
+    $('#tpl-name').value = $('#tpl-fields').value = '';
+    loadTemplates();
+  } catch(e) { alert(e.message); }
+}
+async function activateTpl(id) {
+  await api('/api/templates/' + id + '/activate', { method:'POST' });
+  loadTemplates();
+}
+
+// ---- 提取与核验 ----
+async function runExtract() {
+  try {
+    const r = await api('/api/extract', { method:'POST', body: JSON.stringify({
+      paper_id: +$('#e-paper').value, template_id: +$('#e-template').value }) });
+    alert('已生成 ' + r.created + ' 张证据卡片');
+    loadCards();
+  } catch(e) { alert(e.message); }
+}
+async function loadCards() {
+  const cs = await api('/api/cards');
+  const secs = await api('/api/sections');
+  $('#card-list').innerHTML = cs.length ? cs.map(c => `
+    <div class="section-item" style="align-items:flex-start">
+      <div style="flex:1">
+        <div><span class="badge ${c.status}">${c.status}</span> <b>${esc(c.field)}</b> <span class="muted">#${c.id} · 来自《${esc(c.paper_title)}》 · 置信 ${c.confidence}</span></div>
+        <div style="margin:4px 0"><b>论断：</b>${esc(c.claim)}</div>
+        <div class="muted"><b>原文摘录（verbatim）：</b>${esc(c.excerpt)}</div>
+        ${c.status === 'pending' ? `
+          <div class="row" style="margin-top:6px">
+            <button class="small ok" onclick="verifyCard(${c.id},'approve')">通过</button>
+            <button class="small bad" onclick="verifyCard(${c.id},'reject')">驳回</button>
+            <input id="rev-${c.id}" value="${esc(c.claim)}" style="flex:1">
+            <button class="small warn" onclick="verifyCard(${c.id},'revise')">修订并核验</button>
+          </div>` : ''}
+        ${c.status === 'verified' ? `
+          <div class="row" style="margin-top:6px">
+            <select id="asg-${c.id}" style="flex:1">${secs.map(s=>`<option value="${s.id}">${esc(s.title)}</option>`).join('')}</select>
+            <button class="small" onclick="assignCard(${c.id})">挂到章节</button>
+          </div>` : ''}
+      </div>
+    </div>`).join('') : '<span class="muted">尚无卡片，请先提取。</span>';
+}
+async function verifyCard(id, action) {
+  try {
+    const body = { action };
+    if (action === 'revise') body.claim = $('#rev-' + id).value;
+    await api('/api/cards/' + id + '/verify', { method:'POST', body: JSON.stringify(body) });
+    loadCards();
+  } catch(e) { alert(e.message); }
+}
+async function assignCard(id) {
+  await api('/api/cards/' + id + '/assign', { method:'POST', body: JSON.stringify({ section_id: +$('#asg-' + id).value }) });
+  alert('已挂到章节');
+}
+
+// ---- 框架 ----
+async function loadSections() {
+  const ss = await api('/api/sections');
+  $('#section-list').innerHTML = ss.length ? ss.map(s => `
+    <div class="section-item">
+      <span class="title">#${s.id} ${esc(s.title)}</span>
+      <button class="small" onclick="showSectionCards(${s.id})">查看卡片</button>
+      <button class="small" onclick="renameSection(${s.id})">重命名</button>
+      <button class="small bad" onclick="deleteSection(${s.id})">删除</button>
+    </div>`).join('') : '<span class="muted">暂无章节，可点击"AI 建议框架"生成默认骨架。</span>';
+}
+async function addSection() {
+  try {
+    await api('/api/sections', { method:'POST', body: JSON.stringify({ title: $('#s-title').value }) });
+    $('#s-title').value = ''; loadSections();
+  } catch(e) { alert(e.message); }
+}
+async function renameSection(id) {
+  const t = prompt('新章节标题：');
+  if (t) { await api('/api/sections/' + id, { method:'PUT', body: JSON.stringify({ title: t }) }); loadSections(); }
+}
+async function deleteSection(id) {
+  if (confirm('删除该章节？')) { await api('/api/sections/' + id, { method:'DELETE' }); loadSections(); }
+}
+async function suggestSections() {
+  const r = await api('/api/sections/suggest', { method:'POST' });
+  if (r.suggested.length) alert('已生成默认框架：' + r.suggested.join('、'));
+  else alert(r.note || '已有章节');
+  loadSections();
+}
+async function showSectionCards(id) {
+  const cs = await api('/api/sections/' + id + '/cards');
+  $('#section-cards').innerHTML = cs.length ? cs.map(c =>
+    `<div class="section-item"><span class="title"><b>${esc(c.field)}</b> · ${esc(c.claim)}</span>
+     <span class="muted">《${esc(c.paper_title)}》</span></div>`).join('')
+    : '<span class="muted">该章节暂无绑定卡片（在"提取与核验"中把已核验卡片挂到章节）。</span>';
+}
+
+
+// ---- 协作与版本（数据库 ChangeUnit，不依赖 Git 命令） ----
+const collab = { branches: [], branchId: null, units: {}, mr: null };
+async function guard(fn) {
+  try { return await fn(); } catch (e) { alert(e.message); console.error(e); }
+}
+const fmt = value => value === null || value === undefined ? '（不存在 / 删除）' :
+  (typeof value === 'string' ? value : JSON.stringify(value, null, 2));
+const shortTime = value => String(value || '').replace('T', ' ').slice(0, 19);
+function selectedBranchId() {
+  const id = +$('#g-branch').value;
+  if (!id) throw new Error('请先选择一个工作分支');
+  return id;
+}
+function branchName(id) {
+  const b = collab.branches.find(x => x.id === id);
+  return b ? b.name : '#' + id;
+}
+function mainBranch() { return collab.branches.find(b => b.name === 'main'); }
+
+async function loadCollaboration() {
+  collab.branches = await api('/api/branches');
+  if (!collab.branches.length) throw new Error('协作引擎未初始化主干');
+  if (!collab.branches.some(b => b.id === collab.branchId)) {
+    const main = mainBranch();
+    collab.branchId = (collab.branches.find(b => b !== main) || main).id;
+  }
+  const options = collab.branches.map(b =>
+    `<option value="${b.id}">${esc(b.name)} · head #${b.head_commit_id}</option>`).join('');
+  $('#g-branch').innerHTML = options;
+  $('#g-branch').value = collab.branchId;
+  $('#g-target').innerHTML = options;
+  $('#g-target').value = mainBranch().id;
+  await loadBranch(collab.branchId);
+  await Promise.all([loadMergeRequests(), loadTags()]);
+}
+
+async function createBranch() {
+  const branch = await api('/api/branches', { method:'POST', body: JSON.stringify({
+    name: $('#g-new-name').value.trim(), kind: $('#g-new-kind').value,
+    owner: $('#g-new-owner').value.trim(), purpose: $('#g-new-purpose').value.trim()
+  }) });
+  collab.branchId = branch.id;
+  $('#g-new-name').value = $('#g-new-purpose').value = '';
+  await loadCollaboration();
+}
+
+function fillCardUnit() {
+  const key = $('#g-card-unit').value;
+  const unit = collab.units[key];
+  $('#g-card-value').value = unit ? (typeof unit.content === 'string' ? unit.content : JSON.stringify(unit.content)) : '';
+  $('#g-comment-unit').value = key || '';
+}
+function fillSectionUnit() {
+  const unit = collab.units[$('#g-section-unit').value];
+  $('#g-section-value').value = unit && unit.content ? unit.content.title || '' : '';
+}
+function renderBranchEditors() {
+  const cards = Object.entries(collab.units).filter(([key]) => /^card_attr:\d+:claim$/.test(key));
+  $('#g-card-unit').innerHTML = cards.map(([key, unit]) => {
+    const id = key.split(':')[1];
+    const status = (collab.units['card_attr:' + id + ':status'] || {}).content || '';
+    return `<option value="${esc(key)}">卡片 #${id} [${esc(status)}] · ${esc(String(unit.content).slice(0,42))}</option>`;
+  }).join('');
+  if (!cards.length) $('#g-card-unit').innerHTML = '<option value="">暂无论断单元</option>';
+  const sections = Object.entries(collab.units).filter(([key]) => key.startsWith('structure:'));
+  $('#g-section-unit').innerHTML = sections.map(([key, unit]) =>
+    `<option value="${esc(key)}">#${esc(key.split(':')[1])} ${esc(unit.content.title)}</option>`).join('');
+  if (!sections.length) $('#g-section-unit').innerHTML = '<option value="">暂无章节单元</option>';
+  fillCardUnit(); fillSectionUnit();
+}
+
+async function loadBranch(id) {
+  collab.branchId = id || selectedBranchId();
+  const branch = await api('/api/branches/' + collab.branchId);
+  $('#g-branch').value = branch.id;
+  collab.units = branch.units || {};
+  $('#g-branch-info').textContent = branch.name + ' · 起点 #' + branch.base_commit_id + ' · 当前 #' + branch.head_commit_id + ' · ' + (branch.purpose || '');
+  renderBranchEditors();
+  await loadHistory();
+}
+
+async function commitChanges(message, changes) {
+  const author = $('#g-author').value.trim();
+  if (!author) throw new Error('请填写提交作者');
+  await api('/api/branches/' + selectedBranchId() + '/commits', { method:'POST', body: JSON.stringify({author, message, changes}) });
+  alert('提交成功；工作分支已前进，尚未改动的内容仍保持原版本。');
+  await loadCollaboration();
+}
+async function commitCard() {
+  const key = $('#g-card-unit').value;
+  if (!key) throw new Error('请选择要修订的论断单元');
+  const unit = collab.units[key];
+  const value = $('#g-card-value').value.trim();
+  if (!value) throw new Error('论断不能为空；删除必须通过显式变更记录');
+  await commitChanges('修订卡片 #' + key.split(':')[1] + ' 的论断', [{
+    unit_type:'card_attr', unit_key:key, old_hash:unit.hash, old_content:unit.content, new_content:value
+  }]);
+}
+async function commitSection() {
+  const key = $('#g-section-unit').value;
+  if (!key) throw new Error('请选择章节');
+  const content = Object.assign({}, collab.units[key].content, {title: $('#g-section-value').value.trim()});
+  await commitChanges('修订章节 ' + key.split(':')[1] + ' 的标题', [{
+    unit_type:'structure', unit_key:key, old_hash:collab.units[key].hash,
+    old_content:collab.units[key].content, new_content:content
+  }]);
+}
+
+async function loadHistory() {
+  const main = mainBranch();
+  if (!main) return;
+  const cs = await api('/api/branches/' + main.id + '/commits');
+  $('#g-history').innerHTML = cs.length ? cs.map(c => `<div class="commit">
+    <b>#${c.id} ${esc(c.message)}</b><div class="muted">${esc(c.author)} · ${shortTime(c.created_at)}</div>
+    <button class="small warn" onclick="guard(() => revertCommit(${c.id}))">回滚此提交</button>
+  </div>`).join('') : '<span class="muted">暂无提交。</span>';
+}
+async function revertCommit(id) {
+  const reason = prompt('回滚会产生一个新提交，不会删除历史。\n只有目标单元未被后续修改时才允许回滚。\n请输入原因：', '撤销提交 #' + id);
+  if (reason === null) return;
+  await api('/api/commits/' + id + '/revert', { method:'POST', body: JSON.stringify({author:$('#g-author').value.trim(), reason}) });
+  alert('回滚提交已创建'); await loadCollaboration();
+}
+
+async function openMergeRequest() {
+  const mr = await api('/api/merge-requests', { method:'POST', body: JSON.stringify({
+    source_branch_id:selectedBranchId(), target_branch_id:+$('#g-target').value,
+    author:$('#g-author').value.trim(), title:$('#g-mr-title').value.trim()
+  }) });
+  $('#g-mr-title').value = '';
+  await loadMergeRequests(mr.id);
+}
+async function loadMergeRequests(preferredId) {
+  const ms = await api('/api/merge-requests');
+  const chosen = preferredId || (collab.mr && collab.mr.id) || (ms[0] && ms[0].id);
+  $('#g-mr-select').innerHTML = ms.length ? ms.map(m => `<option value="${m.id}">MR !${m.id} · ${esc(m.title)} [${esc(m.status)}]</option>`).join('') : '<option value="">暂无合并请求</option>';
+  if (chosen && ms.some(m => m.id === chosen)) {
+    $('#g-mr-select').value = chosen;
+    await showMergeRequest(chosen);
+  } else {
+    collab.mr = null;
+    $('#g-mr-summary').textContent = '暂无合并请求。';
+    $('#g-reviews').innerHTML = $('#g-preview').innerHTML = '';
+  }
+}
+function requireMergeRequest() {
+  if (!collab.mr) throw new Error('请先创建并选择一个合并请求');
+  return collab.mr;
+}
+async function showMergeRequest(id) {
+  const m = await api('/api/merge-requests/' + (id || +$('#g-mr-select').value));
+  collab.mr = m;
+  $('#g-mr-select').value = m.id;
+  const p = m.preview || {};
+  $('#g-mr-summary').innerHTML = `<p><span class="badge ${esc(m.status)}">${esc(m.status)}</span>
+    ${esc(branchName(m.source_branch_id))} → ${esc(branchName(m.target_branch_id))} · 需要 ${m.required_approvals} 人批准
+    ${p.stale ? '<span class="badge conflict">请求中的预览已过期，请重新检测</span>' : ''}</p>`;
+  const reviews = m.reviews || [];
+  $('#g-reviews').innerHTML = reviews.length ? reviews.map(r => `<div class="commit">
+    <b>${esc(r.reviewer)}：${r.verdict === 'approve' ? '批准' : '要求修改'}</b>
+    <span class="muted">源提交 #${r.source_commit_id} · ${shortTime(r.created_at)}</span>
+    ${(r.comments || []).map(c => `<div><code>${esc(c.unit_key)}</code> ${esc(c.body)}</div>`).join('')}
+  </div>`).join('') : '<p class="muted">暂未审核。</p>';
+  const cs = m.conflicts || [];
+  const changeMarkup = (p.changes || []).length ? `<details open><summary>本次来源分支变更（点击单元可写内联评论）</summary>
+    ${p.changes.map((c, i) => `<div class="commit"><button class="small" onclick="selectChangedUnit(${i})"><code>${esc(c.unit_key)}</code></button>
+      <div class="three"><div><b>base</b><pre class="code">${esc(fmt(c.base_content))}</pre></div>
+      <div><b>目标 ours</b><pre class="code">${esc(fmt(c.ours_content))}</pre></div>
+      <div><b>来源 theirs</b><pre class="code">${esc(fmt(c.theirs_content))}</pre></div></div></div>`).join('')}</details>` : '';
+  $('#g-preview').innerHTML = `<div class="hint">base：#<b>${p.base_commit_id ?? '待检测'}</b>；目标 ours：#<b>${p.ours_commit_id ?? '—'}</b>；来源 theirs：#<b>${p.theirs_commit_id ?? '—'}</b>。只有双方均修改同一单元且结果不同才冲突。</div>` +
+    changeMarkup + (cs.length ? cs.map(c => `<div class="card">
+      <b><code>${esc(c.unit_key)}</code></b> <span class="badge ${c.resolution ? 'verified' : 'conflict'}">${c.resolution ? '已解决：' + esc(c.resolution) : '待解决冲突'}</span>
+      <div class="three">
+        <div><b>共同祖先 base</b><pre class="code">${esc(fmt(c.base_content))}</pre></div>
+        <div><b>目标 ours</b><pre class="code">${esc(fmt(c.ours_content))}</pre></div>
+        <div><b>来源 theirs</b><pre class="code">${esc(fmt(c.theirs_content))}</pre></div>
+      </div>
+      ${c.resolution ? '<div class="muted">解决人：' + esc(c.resolved_by) + ' · 结果：' + esc(fmt(c.resolved_content)) + '</div>' : `
+        <label class="field">手工合并内容（对象请输入 JSON，普通文本可直接输入）</label>
+        <textarea id="g-resolution-${c.id}">${esc(fmt(c.theirs_content))}</textarea>
+        <div class="actions"><button class="small" onclick="guard(() => resolveConflict(${c.id},'keep_base'))">保留目标</button>
+        <button class="small" onclick="guard(() => resolveConflict(${c.id},'keep_branch'))">保留来源</button>
+        <button class="small warn" onclick="guard(() => resolveConflict(${c.id},'manual'))">采用手工内容</button></div>`}
+    </div>`).join('') : '<p class="muted">当前检测未发现冲突。</p>');
+}
+function selectChangedUnit(index) {
+  const m = requireMergeRequest();
+  const change = ((m.preview || {}).changes || [])[index];
+  if (!change) return;
+  $('#g-comment-unit').value = change.unit_key;
+  $('#g-comment-body').focus();
+}
+async function refreshMergeRequest() {
+  const m = requireMergeRequest();
+  await api('/api/merge-requests/' + m.id + '/preview', { method:'POST' });
+  await showMergeRequest(m.id);
+}
+async function reviewMergeRequest(verdict) {
+  const m = requireMergeRequest();
+  const comments = [];
+  const body = $('#g-comment-body').value.trim();
+  if (body) {
+    const unit_key = $('#g-comment-unit').value.trim();
+    if (!unit_key) throw new Error('内联评论必须填写 unit_key');
+    comments.push({unit_key, body});
+  }
+  await api('/api/merge-requests/' + m.id + '/reviews', { method:'POST', body: JSON.stringify({
+    reviewer:$('#g-reviewer').value.trim(), verdict, comments
+  }) });
+  $('#g-comment-body').value = '';
+  await showMergeRequest(m.id);
+  await loadMergeRequests(m.id);
+}
+async function resolveConflict(id, resolution) {
+  const m = requireMergeRequest();
+  const body = {resolution, actor:$('#g-mr-actor').value.trim()};
+  if (resolution === 'manual') {
+    const raw = $('#g-resolution-' + id).value;
+    try { body.manual_content = JSON.parse(raw); } catch (_) { body.manual_content = raw; }
+  }
+  await api('/api/merge-requests/conflicts/' + id + '/resolve', { method:'POST', body:JSON.stringify(body) });
+  await showMergeRequest(m.id);
+}
+async function mergeMergeRequest() {
+  const m = requireMergeRequest();
+  if (!confirm('确认将 MR !' + m.id + ' 合并到目标分支？系统将校验最新审核、冲突状态和证据摘录。')) return;
+  await api('/api/merge-requests/' + m.id + '/merge', { method:'POST', body: JSON.stringify({actor:$('#g-mr-actor').value.trim()}) });
+  alert('合并成功，目标分支生成新的合并提交。');
+  await loadCollaboration(); await loadCards(); await loadSections();
+}
+
+async function createTag() {
+  const main = mainBranch();
+  await api('/api/tags', { method:'POST', body: JSON.stringify({
+    name:$('#g-tag-name').value.trim(), commit_id:main.head_commit_id, author:$('#g-tag-author').value.trim()
+  }) });
+  $('#g-tag-name').value = ''; await loadTags();
+}
+async function loadTags() {
+  const ts = await api('/api/tags');
+  $('#g-tags').innerHTML = ts.length ? '<table><tr><th>标签</th><th>提交</th><th>创建时间</th></tr>' + ts.map(t =>
+    `<tr><td><button class="small" onclick="guard(() => showTag(${t.id}))">${esc(t.name)}</button></td><td>#${t.commit_id}</td><td>${shortTime(t.created_at)}</td></tr>`).join('') + '</table>' : '<span class="muted">尚无版本标签。</span>';
+}
+async function showTag(id) {
+  const t = await api('/api/tags/' + id);
+  const count = Object.keys(t.snapshot || {}).length;
+  $('#g-tag-detail').innerHTML = `<p><b>${esc(t.name)}</b> 固定于提交 #${t.commit_id}，共 ${count} 个单元，不随后续提交改变。</p>
+    <details><summary>展开完整快照 JSON</summary><pre class="code">${esc(JSON.stringify(t.snapshot, null, 2))}</pre></details>`;
+}
+
+loadPapers(); loadTemplates(); loadCards(); loadSections(); guard(loadCollaboration);
+</script>
+</body>
+</html>
