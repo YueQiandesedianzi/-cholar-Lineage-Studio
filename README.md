@@ -10,9 +10,9 @@
 
 ## 系统结构
 
-![ReviewGit 系统结构图](assets/reviewgit-structure.png)
+![ReviewGit 当前实现架构](assets/reviewgit-structure.png)
 
-> 此图是**完整版设计蓝图**，不是实时界面截图。图中部分外部服务、PostgreSQL 和完整追溯能力属于后续扩展；当前可运行版采用 SQLite、Mock 提取器和本地单项目协作内核。
+> 此图对应 **2026-11-12 的本地实现**：Flask 单进程 + SQLite、Mock 提取器、本地单项目协作内核。图中底部虚线区列出尚未实现的能力（真实 LLM Provider、PDF 全文解析、句级引用绑定、用户与角色鉴权、PostgreSQL / 多项目、历史版本导出），它们属于后续扩展，不是当前可用功能。
 
 ## 特性
 
@@ -46,7 +46,7 @@ reviewgit/
 │   ├── review-outline-template.md
 │   ├── evidence-card-template.md
 │   ├── division-of-labor-log-template.md
-│   └── reviewgit-structure.png      # 完整版设计蓝图副本
+│   └── reviewgit-structure.png      # 当前实现架构图（与代码一致）
 ├── scripts/
 │   ├── launch.py                    # 启动服务，支持自定义数据库与端口
 │   └── package.py                   # 重建分发快照，排除运行时文件
