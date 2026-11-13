@@ -10,9 +10,9 @@
 
 ## 系统结构
 
-![ReviewGit 当前实现架构](assets/reviewgit-structure.png)
+![ReviewGit 当前实现架构示意（AI 生成）](assets/reviewgit-structure.png)
 
-> 此图对应 **2026-11-12 的本地实现**：Flask 单进程 + SQLite、Mock 提取器、本地单项目协作内核。图中底部虚线区列出尚未实现的能力（真实 LLM Provider、PDF 全文解析、句级引用绑定、用户与角色鉴权、PostgreSQL / 多项目、历史版本导出），它们属于后续扩展，不是当前可用功能。
+> 此图是 **AI 生成的示意插画**（Doubao-Seedream 5.5），用于快速建立整体结构印象。图中文字、数字与排版可能存在生成误差，**以正文、REST API 表和代码为准**。它对应 2026-11-12 的本地实现：Flask 单进程 + SQLite、Mock 提取器、本地单项目协作内核。图中底部虚线区列出尚未实现的能力（真实 LLM Provider、PDF 全文解析、句级引用绑定、用户与角色鉴权、PostgreSQL / 多项目、历史版本导出），它们属于后续扩展，不是当前可用功能。
 
 ## 特性
 
