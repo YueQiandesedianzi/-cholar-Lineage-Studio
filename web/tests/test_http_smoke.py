@@ -48,7 +48,7 @@ class CollaborationHttpSmokeTest(unittest.TestCase):
                 )
                 try:
                     ready = False
-                    for unused in range(80):
+                    for _ in range(80):
                         if process.poll() is not None:
                             break
                         try:

@@ -209,8 +209,8 @@ def _canon(value):
 def _hash(content):
     try:
         encoded = _canon(content).encode("utf-8")
-    except (TypeError, ValueError):
-        raise ApiError(400, "单元内容必须是有限、可序列化的 JSON 值")
+    except (TypeError, ValueError) as exc:
+        raise ApiError(400, "单元内容必须是有限、可序列化的 JSON 值") from exc
     return hashlib.sha256(encoded).hexdigest()
 
 
@@ -219,8 +219,8 @@ def _loads(value, default=None):
         return default
     try:
         return json.loads(value)
-    except (TypeError, ValueError):
-        raise ApiError(409, "数据库中的 JSON 内容无效")
+    except (TypeError, ValueError) as exc:
+        raise ApiError(409, "数据库中的 JSON 内容无效") from exc
 
 
 def _snapshot(commit_row):
@@ -291,8 +291,8 @@ def _parse_id(value, label):
         raise ApiError(400, "%s 标识无效" % label)
     try:
         parsed = int(value)
-    except (TypeError, ValueError):
-        raise ApiError(400, "%s 标识无效" % label)
+    except (TypeError, ValueError) as exc:
+        raise ApiError(400, "%s 标识无效" % label) from exc
     if parsed <= 0 or str(value) != str(parsed):
         raise ApiError(400, "%s 标识无效" % label)
     return parsed

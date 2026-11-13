@@ -1,0 +1,11 @@
+[MAIN]
+# 本项目只用 pylint 做「错误 / 警告」级别检查：C（convention）与 R（refactor）
+# 主要是 docstring、命名、行长、复杂度等风格建议，由代码评审负责，不在 CI 里卡。
+# 种子语料含真实英文摘要（长行属于数据），测试类在方法内设置属性属 unittest 常规写法。
+py-version = 3.10
+
+[MESSAGES CONTROL]
+disable = C, R, W0201
+
+[REPORTS]
+score = yes
