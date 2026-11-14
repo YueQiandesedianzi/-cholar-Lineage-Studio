@@ -79,6 +79,22 @@
   header .identity { margin-left:auto; display:flex; align-items:center; gap:8px; font-size:12px; color:#94a3b8; }
   header .identity input { width:130px; padding:4px 8px; font-size:12px; border-radius:6px;
                            border:1px solid #334155; background:#1e293b; color:#e2e8f0; }
+
+  /* 卡片工具栏 / 筛选 / 批量 / 键盘流 */
+  .toolbar { border:1px solid var(--line); border-radius:8px; padding:10px; background:#f8fafc; margin-bottom:12px; }
+  .toolbar select { max-width:200px; }
+  .chips { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:8px; }
+  .chip { border:1px solid #cbd5e1; background:#fff; border-radius:999px; padding:4px 12px;
+          font-size:12px; cursor:pointer; color:#334155; }
+  .chip.active { border-color:var(--blue); background:#eff6ff; color:var(--blue); font-weight:600; }
+  .card-item { border-radius:8px; }
+  .card-item.focused { background:#eff6ff; box-shadow:inset 3px 0 0 var(--blue); }
+  .card-check { margin:4px 8px 0 0; }
+  ins.diff-add { background:#dcfce7; color:#166534; text-decoration:none; border-radius:3px; }
+  del.diff-del { background:#fee2e2; color:#991b1b; border-radius:3px; }
+  .diff-preview { font-size:12px; color:#475569; margin-top:4px; }
+  .kbd { border:1px solid #cbd5e1; border-bottom-width:2px; border-radius:4px; padding:0 4px;
+         font-family:ui-monospace,Consolas,monospace; font-size:11px; background:#fff; }
 </style>
 </head>
 <body>
@@ -133,7 +149,42 @@
         <button class="primary" onclick="runExtract()">提取证据卡片</button>
       </div>
     </div>
-    <div class="card"><h2>证据卡片（核验：通过 / 驳回 / 修订）</h2><div id="card-list"><span class="muted">尚未提取。</span></div></div>
+    <div class="card">
+      <h2>证据卡片（核验：通过 / 驳回 / 修订）</h2>
+      <div class="toolbar">
+        <div class="chips" id="card-stats"></div>
+        <div class="row">
+          <input id="card-search" placeholder="搜索论断 / 摘录 / 文献标题…" style="flex:1;min-width:220px" autocomplete="off">
+          <select id="card-filter-paper" aria-label="按文献筛选"></select>
+          <select id="card-filter-field" aria-label="按字段筛选"></select>
+          <select id="card-filter-section" aria-label="按章节挂载筛选"></select>
+          <select id="card-sort" aria-label="排序">
+            <option value="id">按编号</option>
+            <option value="id-desc">按编号倒序</option>
+            <option value="status">按状态（待核验优先）</option>
+            <option value="paper">按文献</option>
+          </select>
+          <button class="small" onclick="resetCardFilters()">清空条件</button>
+        </div>
+        <div class="row" style="margin-top:8px">
+          <label class="muted"><input type="checkbox" id="card-select-all"> 全选当前结果</label>
+          <span class="muted" id="card-selected">已选 0 张</span>
+          <button class="small ok" onclick="bulkVerify('approve')">批量通过</button>
+          <button class="small bad" onclick="bulkVerify('reject')">批量驳回</button>
+          <select id="bulk-section" aria-label="批量挂载目标章节"></select>
+          <button class="small" onclick="bulkAssign()">批量挂到章节</button>
+          <button class="small" onclick="clearCardSelection()">清除选择</button>
+        </div>
+        <div class="muted" style="margin-top:8px">
+          快捷键：<span class="kbd">j</span>/<span class="kbd">k</span> 移动 ·
+          <span class="kbd">a</span> 通过 · <span class="kbd">r</span> 驳回 ·
+          <span class="kbd">e</span> 修订 · <span class="kbd">Enter</span> 保存 · <span class="kbd">Esc</span> 取消 ·
+          <span class="kbd">空格</span> 勾选
+        </div>
+      </div>
+      <div id="card-list"><span class="muted">尚未提取。</span></div>
+      <div class="row" id="card-pager" style="margin-top:10px"></div>
+    </div>
   </section>
 
   <!-- 综述框架 -->
@@ -421,48 +472,167 @@ async function runExtract() {
     loadCards();
   } catch(e) { notify(e.message, 'error'); }
 }
+const cardState = {
+  cards: [], sections: [], page: 1, pageSize: 50, focusIndex: 0,
+  selected: new Set(),
+  filters: { status: '', q: '', paper: '', field: '', section: '', sort: 'id' },
+};
+const STATUS_LABELS = { pending: '待核验', verified: '已核验', rejected: '已驳回', needs_revision: '需修订' };
+const statusLabel = (status) => STATUS_LABELS[status] || status;
+const VERIFY_LABELS = { approve: '通过', reject: '驳回', revise: '修订并核验', reset: '退回待核验' };
+
 async function loadCards() {
-  const cs = await api('/api/cards');
-  const secs = await api('/api/sections');
-  const actionRow = (c) => {
-    const reviseInput = `<input id="rev-${c.id}" value="${esc(c.claim)}" style="flex:1" aria-label="修订后的论断">`;
-    if (c.status === 'pending') {
-      return `<div class="row" style="margin-top:6px">
-        <button class="small ok" onclick="verifyCard(${c.id},'approve')">通过</button>
-        <button class="small bad" onclick="verifyCard(${c.id},'reject')">驳回</button>
-        ${reviseInput}
-        <button class="small warn" onclick="verifyCard(${c.id},'revise')">修订并核验</button>
-      </div>`;
+  const [cs, secs] = await Promise.all([api('/api/cards'), api('/api/sections')]);
+  cardState.cards = cs;
+  cardState.sections = secs;
+  // 已删除或已被过滤掉的卡片不再保留勾选
+  [...cardState.selected].forEach(id => { if (!cs.some(c => c.id === id)) cardState.selected.delete(id); });
+  renderCardFilters();
+  renderCards();
+}
+
+function renderCardFilters() {
+  const papers = [...new Map(cardState.cards.map(c => [c.paper_id, c.paper_title])).entries()];
+  const fields = [...new Set(cardState.cards.map(c => c.field))];
+  $('#card-filter-paper').innerHTML = '<option value="">全部文献</option>' +
+    papers.map(([id, title]) => `<option value="${id}">${esc(title)}</option>`).join('');
+  $('#card-filter-field').innerHTML = '<option value="">全部字段</option>' +
+    fields.map(f => `<option value="${esc(f)}">${esc(f)}</option>`).join('');
+  const sectionOptions = cardState.sections.map(s => `<option value="${s.id}">${esc(s.title)}</option>`).join('');
+  $('#card-filter-section').innerHTML = '<option value="">全部章节</option><option value="none">未挂章节</option>' + sectionOptions;
+  $('#bulk-section').innerHTML = sectionOptions || '<option value="">（暂无章节）</option>';
+  $('#card-filter-paper').value = cardState.filters.paper;
+  $('#card-filter-field').value = cardState.filters.field;
+  $('#card-filter-section').value = cardState.filters.section;
+  $('#card-sort').value = cardState.filters.sort;
+}
+
+function filteredCards() {
+  const f = cardState.filters;
+  const needle = f.q.trim().toLowerCase();
+  let list = cardState.cards.filter(c => {
+    if (f.status && c.status !== f.status) return false;
+    if (f.paper && String(c.paper_id) !== String(f.paper)) return false;
+    if (f.field && c.field !== f.field) return false;
+    if (f.section === 'none' && c.section_ids.length) return false;
+    if (f.section && f.section !== 'none' && !c.section_ids.includes(+f.section)) return false;
+    if (needle) {
+      const haystack = `${c.claim} ${c.excerpt} ${c.paper_title} ${c.field}`.toLowerCase();
+      if (!haystack.includes(needle)) return false;
     }
-    if (c.status === 'verified') {
-      return `<div class="row" style="margin-top:6px">
-        <select id="asg-${c.id}" style="flex:1" aria-label="挂载章节">${secs.map(s=>`<option value="${s.id}">${esc(s.title)}</option>`).join('')}</select>
-        <button class="small" onclick="assignCard(${c.id})">挂到章节</button>
-        ${reviseInput}
-        <button class="small warn" onclick="verifyCard(${c.id},'revise')">修订论断</button>
-        <button class="small" onclick="verifyCard(${c.id},'reset')">退回待核验</button>
-        <button class="small bad" onclick="verifyCard(${c.id},'reject')">改判驳回</button>
-      </div>`;
-    }
-    return `<div class="row" style="margin-top:6px">
+    return true;
+  });
+  const order = { pending: 0, verified: 1, rejected: 2, needs_revision: 3 };
+  if (f.sort === 'id-desc') list = list.slice().sort((a, b) => b.id - a.id);
+  else if (f.sort === 'status') list = list.slice().sort((a, b) => (order[a.status] ?? 9) - (order[b.status] ?? 9) || a.id - b.id);
+  else if (f.sort === 'paper') list = list.slice().sort((a, b) => a.paper_id - b.paper_id || a.id - b.id);
+  return list;
+}
+
+function cardMarkup(c, index) {
+  const reviseInput = `<input id="rev-${c.id}" value="${esc(c.claim)}" style="flex:1;min-width:200px"
+    aria-label="修订后的论断" oninput="renderReviseDiff(${c.id})">`;
+  const mounted = c.section_ids.map(id => {
+    const section = cardState.sections.find(s => s.id === id);
+    return section ? section.title : ('#' + id);
+  });
+  let actions;
+  if (c.status === 'pending') {
+    actions = `<div class="row" style="margin-top:6px">
+      <button class="small ok" onclick="verifyCard(${c.id},'approve')">通过</button>
+      <button class="small bad" onclick="verifyCard(${c.id},'reject')">驳回</button>
+      ${reviseInput}
+      <button class="small warn" onclick="verifyCard(${c.id},'revise')">修订并核验</button>
+    </div>`;
+  } else if (c.status === 'verified') {
+    actions = `<div class="row" style="margin-top:6px">
+      <select id="asg-${c.id}" style="flex:1;min-width:150px" aria-label="挂载章节">${cardState.sections.map(s=>`<option value="${s.id}">${esc(s.title)}</option>`).join('')}</select>
+      <button class="small" onclick="assignCard(${c.id})">挂到章节</button>
+      ${reviseInput}
+      <button class="small warn" onclick="verifyCard(${c.id},'revise')">修订论断</button>
+      <button class="small" onclick="verifyCard(${c.id},'reset')">退回待核验</button>
+      <button class="small bad" onclick="verifyCard(${c.id},'reject')">改判驳回</button>
+    </div>`;
+  } else {
+    actions = `<div class="row" style="margin-top:6px">
       ${reviseInput}
       <button class="small ok" onclick="verifyCard(${c.id},'revise')">修订并核验</button>
       <button class="small ok" onclick="verifyCard(${c.id},'approve')">改判通过</button>
       <button class="small" onclick="verifyCard(${c.id},'reset')">退回待核验</button>
     </div>`;
-  };
-  $('#card-list').innerHTML = cs.length ? cs.map(c => `
-    <div class="section-item" style="align-items:flex-start">
-      <div style="flex:1">
-        <div><span class="badge ${c.status}">${statusLabel(c.status)}</span> <b>${esc(c.field)}</b> <span class="muted">#${c.id} · 来自《${esc(c.paper_title)}》 · 置信 ${c.confidence}</span></div>
-        <div style="margin:4px 0"><b>论断：</b>${esc(c.claim)}</div>
-        <div class="muted"><b>原文摘录（verbatim）：</b>${esc(c.excerpt)}</div>
-        ${actionRow(c)}
-      </div>
-    </div>`).join('') : '<span class="muted">尚无卡片，请先提取。</span>';
+  }
+  return `<div class="section-item card-item ${index === cardState.focusIndex ? 'focused' : ''}" id="card-item-${c.id}" style="align-items:flex-start">
+    <input type="checkbox" class="card-check" id="sel-${c.id}" ${cardState.selected.has(c.id) ? 'checked' : ''}
+      onchange="toggleSelect(${c.id}, this.checked)" aria-label="选择卡片 #${c.id}">
+    <div style="flex:1">
+      <div><span class="badge ${c.status}">${statusLabel(c.status)}</span> <b>${esc(c.field)}</b>
+        <span class="muted">#${c.id} · 来自《${esc(c.paper_title)}》 · 置信 ${c.confidence}${mounted.length ? ' · 已挂：' + esc(mounted.join('、')) : ''}</span></div>
+      <div style="margin:4px 0"><b>论断：</b>${esc(c.claim)}</div>
+      <div class="muted"><b>原文摘录（verbatim）：</b>${esc(c.excerpt)}</div>
+      ${actions}
+      <div class="diff-preview" id="diff-${c.id}"></div>
+    </div>
+  </div>`;
 }
-const STATUS_LABELS = { pending: '待核验', verified: '已核验', rejected: '已驳回', needs_revision: '需修订' };
-const statusLabel = (status) => STATUS_LABELS[status] || status;
+
+function renderCards() {
+  const all = cardState.cards;
+  const list = filteredCards();
+  const counts = {
+    pending: all.filter(c => c.status === 'pending').length,
+    verified: all.filter(c => c.status === 'verified').length,
+    rejected: all.filter(c => c.status === 'rejected').length,
+    mounted: all.filter(c => c.section_ids.length).length,
+  };
+  const chip = (key, label, count, active) =>
+    `<button class="chip ${active ? 'active' : ''}" onclick="${key === 'none' ? 'toggleMountedFilter()' : `setStatusFilter('${key}')`}">${label} <b>${count}</b></button>`;
+  $('#card-stats').innerHTML =
+    chip('', '全部', all.length, cardState.filters.status === '' && cardState.filters.section !== 'none') +
+    chip('pending', '待核验', counts.pending, cardState.filters.status === 'pending') +
+    chip('verified', '已核验', counts.verified, cardState.filters.status === 'verified') +
+    chip('rejected', '已驳回', counts.rejected, cardState.filters.status === 'rejected') +
+    chip('none', '未挂章节', all.length - counts.mounted, cardState.filters.section === 'none');
+
+  const pages = Math.max(1, Math.ceil(list.length / cardState.pageSize));
+  if (cardState.page > pages) cardState.page = pages;
+  if (cardState.page < 1) cardState.page = 1;
+  if (cardState.focusIndex >= list.length) cardState.focusIndex = Math.max(0, list.length - 1);
+  const start = (cardState.page - 1) * cardState.pageSize;
+  const slice = list.slice(start, start + cardState.pageSize);
+  $('#card-list').innerHTML = list.length
+    ? slice.map((c, i) => cardMarkup(c, start + i)).join('')
+    : '<span class="muted">没有符合条件的卡片；可点击「清空条件」查看全部。</span>';
+  $('#card-pager').innerHTML = list.length > cardState.pageSize
+    ? `<button class="small" onclick="gotoCardPage(${cardState.page - 1})" ${cardState.page <= 1 ? 'disabled' : ''}>上一页</button>
+       <span class="muted">第 ${cardState.page} / ${pages} 页 · 共 ${list.length} 张</span>
+       <button class="small" onclick="gotoCardPage(${cardState.page + 1})" ${cardState.page >= pages ? 'disabled' : ''}>下一页</button>`
+    : `<span class="muted">共 ${list.length} 张${list.length !== all.length ? `（已筛选，全部 ${all.length} 张）` : ''}</span>`;
+  updateSelectionUI(list);
+}
+
+function gotoCardPage(page) {
+  cardState.page = Math.max(1, page);
+  renderCards();
+}
+function setStatusFilter(status) {
+  cardState.filters.status = status;
+  cardState.filters.section = cardState.filters.section === 'none' ? '' : cardState.filters.section;
+  cardState.page = 1; cardState.focusIndex = 0;
+  renderCards();
+}
+function toggleMountedFilter() {
+  cardState.filters.section = cardState.filters.section === 'none' ? '' : 'none';
+  cardState.page = 1; cardState.focusIndex = 0;
+  renderCards();
+}
+function resetCardFilters() {
+  Object.assign(cardState.filters, { status: '', q: '', paper: '', field: '', section: '', sort: 'id' });
+  $('#card-search').value = '';
+  cardState.page = 1; cardState.focusIndex = 0;
+  renderCardFilters();
+  renderCards();
+}
+
 async function verifyCard(id, action) {
   try {
     const body = { action };
@@ -472,16 +642,195 @@ async function verifyCard(id, action) {
     await loadCards();
   } catch(e) { notify(e.message, 'error'); }
 }
-const VERIFY_LABELS = { approve: '通过', reject: '驳回', revise: '修订并核验', reset: '退回待核验' };
 async function assignCard(id) {
   await guard(async () => {
     const sectionId = +$('#asg-' + id).value;
     await api('/api/cards/' + id + '/assign', { method:'POST', body: JSON.stringify({ section_id: sectionId }) });
-    const sections = await api('/api/sections');
-    const name = (sections.find(s => s.id === sectionId) || {}).title || ('#' + sectionId);
-    notify(`卡片 #${id} 已挂到「${name}」`, 'success');
+    const section = cardState.sections.find(s => s.id === sectionId);
+    notify(`卡片 #${id} 已挂到「${section ? section.title : '#' + sectionId}」`, 'success');
     await Promise.all([loadCards(), loadSections()]);
   });
+}
+
+// ---- 多选与批量 ----
+function toggleSelect(id, checked) {
+  const next = checked === undefined ? !cardState.selected.has(id) : checked;
+  if (next) cardState.selected.add(id); else cardState.selected.delete(id);
+  const box = $('#sel-' + id);
+  if (box) box.checked = next;
+  updateSelectionUI();
+}
+function clearCardSelection() {
+  cardState.selected.clear();
+  renderCards();
+}
+function toggleSelectAllFiltered(checked) {
+  filteredCards().forEach(c => { if (checked) cardState.selected.add(c.id); else cardState.selected.delete(c.id); });
+  renderCards();
+}
+function updateSelectionUI(list) {
+  const visible = list || filteredCards();
+  const label = $('#card-selected');
+  if (label) label.textContent = `已选 ${cardState.selected.size} 张`;
+  const all = $('#card-select-all');
+  if (all) {
+    const selectedVisible = visible.filter(c => cardState.selected.has(c.id)).length;
+    all.checked = visible.length > 0 && selectedVisible === visible.length;
+    all.indeterminate = selectedVisible > 0 && selectedVisible < visible.length;
+  }
+}
+async function runBatch(ids, worker, label) {
+  const failed = [];
+  let cursor = 0;
+  const runners = Array.from({ length: Math.min(4, ids.length) }, async () => {
+    while (cursor < ids.length) {
+      const id = ids[cursor];
+      cursor += 1;
+      try { await worker(id); } catch (e) { failed.push({ id, message: e.message }); }
+    }
+  });
+  await Promise.all(runners);
+  cardState.selected.clear();
+  await loadCards();
+  if (failed.length) {
+    const head = failed.slice(0, 8).map(f => `#${f.id} ${f.message}`).join('\n');
+    notify(`${label}：成功 ${ids.length - failed.length} 张，失败 ${failed.length} 张\n${head}` +
+      (failed.length > 8 ? `\n…其余 ${failed.length - 8} 条` : ''), 'error');
+  } else {
+    notify(`${label}：${ids.length} 张全部成功`, 'success');
+  }
+}
+async function bulkVerify(action) {
+  const ids = [...cardState.selected];
+  if (!ids.length) { notify('请先勾选要处理的卡片', 'info'); return; }
+  const label = `批量${VERIFY_LABELS[action] || action}`;
+  const ok = await confirmAction(label, `将对 ${ids.length} 张卡片执行「${VERIFY_LABELS[action] || action}」。\n` +
+    '摘录未通过原文校验的卡片会被拒绝，并在结果里逐条列出。', label);
+  if (!ok) return;
+  await runBatch(ids, async (id) => {
+    await api('/api/cards/' + id + '/verify', { method:'POST', body: JSON.stringify({ action }) });
+  }, label);
+}
+async function bulkAssign() {
+  const ids = [...cardState.selected];
+  if (!ids.length) { notify('请先勾选要挂载的卡片', 'info'); return; }
+  const sectionId = +$('#bulk-section').value;
+  if (!sectionId) { notify('请先在工具栏选择目标章节', 'error'); return; }
+  const section = cardState.sections.find(s => s.id === sectionId);
+  const label = `批量挂到「${section ? section.title : '#' + sectionId}」`;
+  await runBatch(ids, async (id) => {
+    await api('/api/cards/' + id + '/assign', { method:'POST', body: JSON.stringify({ section_id: sectionId }) });
+  }, label);
+}
+
+// ---- 字级差异预览（修订时对比原论断） ----
+function diffParts(oldText, newText) {
+  const a = Array.from(oldText);
+  const b = Array.from(newText);
+  const n = a.length, m = b.length;
+  if (n * m > 60000) return [{ type: 'del', text: oldText }, { type: 'add', text: newText }];
+  const table = Array.from({ length: n + 1 }, () => new Uint16Array(m + 1));
+  for (let i = n - 1; i >= 0; i -= 1) {
+    for (let j = m - 1; j >= 0; j -= 1) {
+      table[i][j] = a[i] === b[j] ? table[i + 1][j + 1] + 1 : Math.max(table[i + 1][j], table[i][j + 1]);
+    }
+  }
+  const parts = [];
+  const push = (type, text) => {
+    const last = parts[parts.length - 1];
+    if (last && last.type === type) last.text += text;
+    else parts.push({ type, text });
+  };
+  let i = 0, j = 0;
+  while (i < n && j < m) {
+    if (a[i] === b[j]) { push('same', a[i]); i += 1; j += 1; }
+    else if (table[i + 1][j] >= table[i][j + 1]) { push('del', a[i]); i += 1; }
+    else { push('add', b[j]); j += 1; }
+  }
+  while (i < n) { push('del', a[i]); i += 1; }
+  while (j < m) { push('add', b[j]); j += 1; }
+  return parts;
+}
+function renderReviseDiff(id) {
+  const card = cardState.cards.find(c => c.id === id);
+  const input = $('#rev-' + id);
+  const box = $('#diff-' + id);
+  if (!card || !input || !box) return;
+  if (input.value === card.claim) { box.innerHTML = ''; return; }
+  box.innerHTML = '差异：' + diffParts(card.claim, input.value).map(part =>
+    part.type === 'same' ? esc(part.text)
+      : part.type === 'del' ? `<del class="diff-del">${esc(part.text)}</del>`
+        : `<ins class="diff-add">${esc(part.text)}</ins>`).join('');
+}
+
+// ---- 键盘流：j/k 移动，a/r/e 操作 ----
+function applyFocusClass() {
+  document.querySelectorAll('#card-list .card-item').forEach(el => el.classList.remove('focused'));
+  const current = filteredCards()[cardState.focusIndex];
+  if (!current) return;
+  const el = $('#card-item-' + current.id);
+  if (el) el.classList.add('focused');
+}
+function moveFocus(step) {
+  const list = filteredCards();
+  if (!list.length) return;
+  cardState.focusIndex = Math.min(list.length - 1, Math.max(0, cardState.focusIndex + step));
+  const page = Math.floor(cardState.focusIndex / cardState.pageSize) + 1;
+  if (page !== cardState.page) { cardState.page = page; renderCards(); }
+  applyFocusClass();
+  const el = $('#card-item-' + list[cardState.focusIndex].id);
+  if (el && el.scrollIntoView) el.scrollIntoView({ block: 'nearest' });
+}
+function onCardKeydown(event) {
+  const panel = $('#extract');
+  if (!panel || !panel.classList.contains('active')) return;
+  const tag = (event.target.tagName || '').toLowerCase();
+  if (tag === 'input' || tag === 'textarea' || tag === 'select') {
+    if (event.key === 'Enter' && event.target.id.startsWith('rev-')) {
+      event.preventDefault();
+      verifyCard(+event.target.id.slice(4), 'revise');
+    } else if (event.key === 'Escape') {
+      event.target.blur();
+    }
+    return;
+  }
+  const key = event.key.toLowerCase();
+  if (key === 'j' || key === 'arrowdown') { event.preventDefault(); moveFocus(1); return; }
+  if (key === 'k' || key === 'arrowup') { event.preventDefault(); moveFocus(-1); return; }
+  const current = filteredCards()[cardState.focusIndex];
+  if (!current) return;
+  if (key === 'a') { event.preventDefault(); verifyCard(current.id, 'approve'); }
+  else if (key === 'r') { event.preventDefault(); verifyCard(current.id, 'reject'); }
+  else if (key === 'e') {
+    event.preventDefault();
+    const input = $('#rev-' + current.id);
+    if (input) { input.focus(); input.select(); }
+  } else if (key === ' ') { event.preventDefault(); toggleSelect(current.id); }
+}
+function bindCardToolbar() {
+  $('#card-search').addEventListener('input', () => {
+    cardState.filters.q = $('#card-search').value;
+    cardState.page = 1; cardState.focusIndex = 0;
+    renderCards();
+  });
+  $('#card-filter-paper').addEventListener('change', () => {
+    cardState.filters.paper = $('#card-filter-paper').value;
+    cardState.page = 1; cardState.focusIndex = 0; renderCards();
+  });
+  $('#card-filter-field').addEventListener('change', () => {
+    cardState.filters.field = $('#card-filter-field').value;
+    cardState.page = 1; cardState.focusIndex = 0; renderCards();
+  });
+  $('#card-filter-section').addEventListener('change', () => {
+    cardState.filters.section = $('#card-filter-section').value;
+    cardState.page = 1; cardState.focusIndex = 0; renderCards();
+  });
+  $('#card-sort').addEventListener('change', () => {
+    cardState.filters.sort = $('#card-sort').value;
+    renderCards();
+  });
+  $('#card-select-all').addEventListener('change', (event) => toggleSelectAllFiltered(event.target.checked));
+  document.addEventListener('keydown', onCardKeydown);
 }
 
 // ---- 框架 ----
@@ -808,6 +1157,7 @@ async function showTag(id) {
 }
 
 bindIdentities();
+bindCardToolbar();
 guard(async () => { await Promise.all([loadPapers(), loadTemplates(), loadCards(), loadSections()]); });
 guard(loadCollaboration);
 </script>

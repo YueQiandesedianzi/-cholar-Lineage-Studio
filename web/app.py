@@ -234,7 +234,11 @@ def extract():
 def list_cards():
     paper_id = request.args.get("paper_id")
     status = request.args.get("status")
-    q = "SELECT c.*, p.title AS paper_title FROM cards c JOIN papers p ON p.id = c.paper_id"
+    q = (
+        "SELECT c.*, p.title AS paper_title, "
+        "(SELECT group_concat(cs.section_id) FROM card_sections cs WHERE cs.card_id = c.id) "
+        "AS section_ids FROM cards c JOIN papers p ON p.id = c.paper_id"
+    )
     conds, args = [], []
     if paper_id:
         conds.append("c.paper_id = ?"); args.append(paper_id)
@@ -248,6 +252,9 @@ def list_cards():
     for r in rows:
         d = dict(r)
         d["field_values"] = json.loads(d.pop("field_values_json"))
+        d["section_ids"] = sorted(
+            int(part) for part in (d.pop("section_ids") or "").split(",") if part
+        )
         out.append(d)
     return jsonify(out)
 
