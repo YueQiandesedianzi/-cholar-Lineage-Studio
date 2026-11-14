@@ -256,8 +256,8 @@ def list_cards():
 def verify_card(cid):
     d = request.get_json(force=True, silent=True) or {}
     action = d.get("action")
-    if action not in ("approve", "reject", "revise"):
-        return jsonify({"error": "action 必须是 approve/reject/revise"}), 400
+    if action not in ("approve", "reject", "revise", "reset"):
+        return jsonify({"error": "action 必须是 approve/reject/revise/reset"}), 400
     db = get_db()
     card = db.execute(
         "SELECT c.*, COALESCE(p.full_text, p.abstract, '') AS source_text "
@@ -279,6 +279,9 @@ def verify_card(cid):
         if not claim:
             return jsonify({"error": "revise 需要新的 claim"}), 400
         db.execute("UPDATE cards SET claim = ?, status = 'verified' WHERE id = ?", (claim, cid))
+    elif action == "reset":
+        # 撤回核验结论，回到待核验；摘录校验只约束"通过"，不约束撤回。
+        db.execute("UPDATE cards SET status = 'pending' WHERE id = ?", (cid,))
     db.commit()
     return jsonify({"ok": True})
 

@@ -54,12 +54,41 @@
   .section-item { display:flex; align-items:center; gap:8px; padding:6px 0; border-bottom:1px dashed var(--line); }
   .section-item .title { flex:1; }
   .hint { background:#f1f5f9; border-left:3px solid #94a3b8; padding:8px 12px; font-size:12px; color:#475569; border-radius:0 6px 6px 0; margin-bottom:12px; }
+
+  /* 通知（替代 alert） */
+  #toasts { position:fixed; right:18px; bottom:18px; display:flex; flex-direction:column; gap:8px; z-index:50; max-width:min(420px,calc(100vw - 36px)); }
+  .toast { background:#0f172a; color:#e2e8f0; border-radius:8px; padding:10px 12px; font-size:13px;
+           box-shadow:0 6px 18px rgba(15,23,42,.18); display:flex; gap:10px; align-items:flex-start; }
+  .toast.success { background:#14532d; }
+  .toast.error { background:#7f1d1d; }
+  .toast .msg { flex:1; white-space:pre-wrap; word-break:break-word; }
+  .toast button { background:transparent; border:1px solid rgba(255,255,255,.35); color:inherit;
+                  border-radius:6px; font-size:12px; padding:2px 8px; cursor:pointer; }
+
+  /* 对话框（替代 confirm / prompt） */
+  #modal-root:empty { display:none; }
+  .modal-mask { position:fixed; inset:0; background:rgba(15,23,42,.45); display:flex; align-items:center;
+                justify-content:center; z-index:60; padding:20px; }
+  .modal { background:#fff; border-radius:12px; padding:20px; max-width:480px; width:100%;
+           box-shadow:0 20px 50px rgba(15,23,42,.3); }
+  .modal h3 { margin:0 0 10px; font-size:16px; }
+  .modal p { margin:0 0 12px; font-size:13px; color:#475569; white-space:pre-wrap; }
+  .modal .modal-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:14px; }
+
+  /* 顶部身份设置 */
+  header .identity { margin-left:auto; display:flex; align-items:center; gap:8px; font-size:12px; color:#94a3b8; }
+  header .identity input { width:130px; padding:4px 8px; font-size:12px; border-radius:6px;
+                           border:1px solid #334155; background:#1e293b; color:#e2e8f0; }
 </style>
 </head>
 <body>
 <header>
   <h1>Σcholar Lineage Studio</h1>
   <span class="tag">导入 → 提取 → 核验 → 框架 → 分支/审核/合并/版本 · AI 提取为 Mock</span>
+  <span class="identity" title="用于提交作者 / 分支负责人 / 操作人；审核人单独填写">
+    当前身份
+    <input id="me" placeholder="你的名字" autocomplete="off">
+  </span>
 </header>
 <nav>
   <button data-tab="papers" class="active">文献</button>
@@ -189,9 +218,130 @@
   </section>
 </main>
 
+<div id="toasts"></div>
+<div id="modal-root"></div>
+
 <script>
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+// ---------------- 通知与对话框（替代 alert / confirm / prompt） ----------------
+function notify(message, type = 'info') {
+  const box = document.getElementById('toasts');
+  const el = document.createElement('div');
+  el.className = 'toast ' + type;
+  const msg = document.createElement('div');
+  msg.className = 'msg';
+  msg.textContent = String(message);
+  el.appendChild(msg);
+  if (type === 'error') {
+    const copy = document.createElement('button');
+    copy.textContent = '复制';
+    copy.onclick = () => {
+      if (navigator.clipboard) navigator.clipboard.writeText(String(message));
+      copy.textContent = '已复制';
+    };
+    el.appendChild(copy);
+  }
+  const close = document.createElement('button');
+  close.textContent = '×';
+  close.title = '关闭';
+  close.onclick = () => el.remove();
+  el.appendChild(close);
+  box.appendChild(el);
+  if (type === 'success') setTimeout(() => el.remove(), 2500);
+  return el;
+}
+
+// 返回 Promise：确认→true，取消→null；带输入框时返回输入文本（空则 null）
+function openModal({ title, body, input, confirmText = '确定', danger = false }) {
+  return new Promise((resolve) => {
+    const root = document.getElementById('modal-root');
+    const previous = document.activeElement;
+    const finish = (value) => { root.innerHTML = ''; if (previous && previous.focus) previous.focus(); resolve(value); };
+    const mask = document.createElement('div');
+    mask.className = 'modal-mask';
+    const modal = document.createElement('div');
+    modal.className = 'modal';
+    const h = document.createElement('h3');
+    h.textContent = title;
+    const p = document.createElement('p');
+    p.textContent = body || '';
+    modal.append(h, p);
+    let field = null;
+    if (input) {
+      const label = document.createElement('label');
+      label.className = 'field';
+      label.textContent = input.label || '';
+      field = document.createElement('input');
+      field.type = 'text';
+      field.value = input.value || '';
+      modal.append(label, field);
+    }
+    const actions = document.createElement('div');
+    actions.className = 'modal-actions';
+    const cancel = document.createElement('button');
+    cancel.className = 'small';
+    cancel.textContent = '取消';
+    cancel.onclick = () => finish(null);
+    const ok = document.createElement('button');
+    ok.className = danger ? 'small bad' : 'primary';
+    ok.textContent = confirmText;
+    ok.onclick = () => finish(field ? (field.value.trim() || null) : true);
+    actions.append(cancel, ok);
+    modal.append(actions);
+    mask.append(modal);
+    mask.onclick = (event) => { if (event.target === mask) finish(null); };
+    root.append(mask);
+    root.onkeydown = (event) => { if (event.key === 'Escape') finish(null); };
+    (field || ok).focus();
+  });
+}
+const confirmAction = (title, body, confirmText = '确定', danger = false) =>
+  openModal({ title, body, confirmText, danger }).then(v => v === true);
+const askInput = (title, body, label, value, confirmText = '确认') =>
+  openModal({ title, body, input: { label, value }, confirmText }).then(v => (typeof v === 'string' ? v : null));
+
+// ---------------- 身份记忆 ----------------
+const IDENTITY_KEY = 'reviewgit.identity';
+const identity = (() => {
+  const fallback = { me: '协作者', reviewer: '李老师' };
+  try {
+    return Object.assign(fallback, JSON.parse(localStorage.getItem(IDENTITY_KEY) || '{}'));
+  } catch (_) { return fallback; }
+})();
+function saveIdentity() {
+  try { localStorage.setItem(IDENTITY_KEY, JSON.stringify(identity)); } catch (_) { /* 隐私模式下忽略 */ }
+}
+// 把输入框接到身份存储：初始化取存储值，修改后写回
+function bindIdentity(selector, key, fallback) {
+  const el = $(selector);
+  if (!el) return;
+  el.value = identity[key] ?? fallback ?? '';
+  el.addEventListener('change', () => {
+    identity[key] = el.value.trim();
+    saveIdentity();
+    if (key === 'me') applyIdentityToActors();
+  });
+}
+function applyIdentityToActors() {
+  [['#g-author', 'author'], ['#g-new-owner', 'owner'], ['#g-mr-actor', 'actor'], ['#g-tag-author', 'tagAuthor']]
+    .forEach(([selector, key]) => {
+      const el = $(selector);
+      if (!el) return;
+      el.value = identity.me || '';
+      identity[key] = identity.me || '';
+    });
+  saveIdentity();
+}
+function bindIdentities() {
+  bindIdentity('#me', 'me', '协作者');
+  bindIdentity('#g-author', 'author', identity.me);
+  bindIdentity('#g-new-owner', 'owner', identity.me);
+  bindIdentity('#g-reviewer', 'reviewer', '李老师');
+  bindIdentity('#g-mr-actor', 'actor', identity.me);
+  bindIdentity('#g-tag-author', 'tagAuthor', identity.me);
+}
 
 // tabs
 document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
@@ -199,11 +349,11 @@ document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
   document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
   b.classList.add('active');
   $('#' + b.dataset.tab).classList.add('active');
-  if (b.dataset.tab === 'papers') loadPapers();
-  if (b.dataset.tab === 'templates') loadTemplates();
-  if (b.dataset.tab === 'extract') { loadPapers(); loadTemplates(); loadCards(); }
-  if (b.dataset.tab === 'outline') { loadSections(); }
-  if (b.dataset.tab === 'collaboration') { guard(loadCollaboration); }
+  if (b.dataset.tab === 'papers') guard(loadPapers);
+  if (b.dataset.tab === 'templates') guard(loadTemplates);
+  if (b.dataset.tab === 'extract') guard(async () => { await Promise.all([loadPapers(), loadTemplates(), loadCards()]); });
+  if (b.dataset.tab === 'outline') guard(loadSections);
+  if (b.dataset.tab === 'collaboration') guard(loadCollaboration);
 });
 
 async function api(path, opts = {}) {
@@ -223,13 +373,15 @@ async function loadPapers() {
   sel.innerHTML = ps.map(p => `<option value="${p.id}">#${p.id} ${esc(p.title)}</option>`).join('');
 }
 async function addPaper() {
+  const title = $('#p-title').value.trim();
   try {
     await api('/api/papers', { method:'POST', body: JSON.stringify({
       title: $('#p-title').value, authors: $('#p-authors').value,
       year: $('#p-year').value, doi: $('#p-doi').value, abstract: $('#p-abstract').value }) });
     $('#p-title').value = $('#p-authors').value = $('#p-year').value = $('#p-doi').value = $('#p-abstract').value = '';
+    notify(`已导入《${title}》`, 'success');
     loadPapers();
-  } catch(e) { alert(e.message); }
+  } catch(e) { notify(e.message, 'error'); }
 }
 
 // ---- 模板 ----
@@ -248,12 +400,16 @@ async function addTemplate() {
     const fields = $('#tpl-fields').value.split(/[,，]/).map(s=>s.trim()).filter(Boolean);
     await api('/api/templates', { method:'POST', body: JSON.stringify({ name: $('#tpl-name').value, fields }) });
     $('#tpl-name').value = $('#tpl-fields').value = '';
+    notify('模板已创建', 'success');
     loadTemplates();
-  } catch(e) { alert(e.message); }
+  } catch(e) { notify(e.message, 'error'); }
 }
 async function activateTpl(id) {
-  await api('/api/templates/' + id + '/activate', { method:'POST' });
-  loadTemplates();
+  await guard(async () => {
+    await api('/api/templates/' + id + '/activate', { method:'POST' });
+    notify('已切换生效模板', 'success');
+    await loadTemplates();
+  });
 }
 
 // ---- 提取与核验 ----
@@ -261,45 +417,71 @@ async function runExtract() {
   try {
     const r = await api('/api/extract', { method:'POST', body: JSON.stringify({
       paper_id: +$('#e-paper').value, template_id: +$('#e-template').value }) });
-    alert('已生成 ' + r.created + ' 张证据卡片');
+    notify(`已生成 ${r.created} 张证据卡片`, 'success');
     loadCards();
-  } catch(e) { alert(e.message); }
+  } catch(e) { notify(e.message, 'error'); }
 }
 async function loadCards() {
   const cs = await api('/api/cards');
   const secs = await api('/api/sections');
+  const actionRow = (c) => {
+    const reviseInput = `<input id="rev-${c.id}" value="${esc(c.claim)}" style="flex:1" aria-label="修订后的论断">`;
+    if (c.status === 'pending') {
+      return `<div class="row" style="margin-top:6px">
+        <button class="small ok" onclick="verifyCard(${c.id},'approve')">通过</button>
+        <button class="small bad" onclick="verifyCard(${c.id},'reject')">驳回</button>
+        ${reviseInput}
+        <button class="small warn" onclick="verifyCard(${c.id},'revise')">修订并核验</button>
+      </div>`;
+    }
+    if (c.status === 'verified') {
+      return `<div class="row" style="margin-top:6px">
+        <select id="asg-${c.id}" style="flex:1" aria-label="挂载章节">${secs.map(s=>`<option value="${s.id}">${esc(s.title)}</option>`).join('')}</select>
+        <button class="small" onclick="assignCard(${c.id})">挂到章节</button>
+        ${reviseInput}
+        <button class="small warn" onclick="verifyCard(${c.id},'revise')">修订论断</button>
+        <button class="small" onclick="verifyCard(${c.id},'reset')">退回待核验</button>
+        <button class="small bad" onclick="verifyCard(${c.id},'reject')">改判驳回</button>
+      </div>`;
+    }
+    return `<div class="row" style="margin-top:6px">
+      ${reviseInput}
+      <button class="small ok" onclick="verifyCard(${c.id},'revise')">修订并核验</button>
+      <button class="small ok" onclick="verifyCard(${c.id},'approve')">改判通过</button>
+      <button class="small" onclick="verifyCard(${c.id},'reset')">退回待核验</button>
+    </div>`;
+  };
   $('#card-list').innerHTML = cs.length ? cs.map(c => `
     <div class="section-item" style="align-items:flex-start">
       <div style="flex:1">
-        <div><span class="badge ${c.status}">${c.status}</span> <b>${esc(c.field)}</b> <span class="muted">#${c.id} · 来自《${esc(c.paper_title)}》 · 置信 ${c.confidence}</span></div>
+        <div><span class="badge ${c.status}">${statusLabel(c.status)}</span> <b>${esc(c.field)}</b> <span class="muted">#${c.id} · 来自《${esc(c.paper_title)}》 · 置信 ${c.confidence}</span></div>
         <div style="margin:4px 0"><b>论断：</b>${esc(c.claim)}</div>
         <div class="muted"><b>原文摘录（verbatim）：</b>${esc(c.excerpt)}</div>
-        ${c.status === 'pending' ? `
-          <div class="row" style="margin-top:6px">
-            <button class="small ok" onclick="verifyCard(${c.id},'approve')">通过</button>
-            <button class="small bad" onclick="verifyCard(${c.id},'reject')">驳回</button>
-            <input id="rev-${c.id}" value="${esc(c.claim)}" style="flex:1">
-            <button class="small warn" onclick="verifyCard(${c.id},'revise')">修订并核验</button>
-          </div>` : ''}
-        ${c.status === 'verified' ? `
-          <div class="row" style="margin-top:6px">
-            <select id="asg-${c.id}" style="flex:1">${secs.map(s=>`<option value="${s.id}">${esc(s.title)}</option>`).join('')}</select>
-            <button class="small" onclick="assignCard(${c.id})">挂到章节</button>
-          </div>` : ''}
+        ${actionRow(c)}
       </div>
     </div>`).join('') : '<span class="muted">尚无卡片，请先提取。</span>';
 }
+const STATUS_LABELS = { pending: '待核验', verified: '已核验', rejected: '已驳回', needs_revision: '需修订' };
+const statusLabel = (status) => STATUS_LABELS[status] || status;
 async function verifyCard(id, action) {
   try {
     const body = { action };
     if (action === 'revise') body.claim = $('#rev-' + id).value;
     await api('/api/cards/' + id + '/verify', { method:'POST', body: JSON.stringify(body) });
-    loadCards();
-  } catch(e) { alert(e.message); }
+    notify(`卡片 #${id} 已${VERIFY_LABELS[action] || '更新'}`, 'success');
+    await loadCards();
+  } catch(e) { notify(e.message, 'error'); }
 }
+const VERIFY_LABELS = { approve: '通过', reject: '驳回', revise: '修订并核验', reset: '退回待核验' };
 async function assignCard(id) {
-  await api('/api/cards/' + id + '/assign', { method:'POST', body: JSON.stringify({ section_id: +$('#asg-' + id).value }) });
-  alert('已挂到章节');
+  await guard(async () => {
+    const sectionId = +$('#asg-' + id).value;
+    await api('/api/cards/' + id + '/assign', { method:'POST', body: JSON.stringify({ section_id: sectionId }) });
+    const sections = await api('/api/sections');
+    const name = (sections.find(s => s.id === sectionId) || {}).title || ('#' + sectionId);
+    notify(`卡片 #${id} 已挂到「${name}」`, 'success');
+    await Promise.all([loadCards(), loadSections()]);
+  });
 }
 
 // ---- 框架 ----
@@ -316,35 +498,59 @@ async function loadSections() {
 async function addSection() {
   try {
     await api('/api/sections', { method:'POST', body: JSON.stringify({ title: $('#s-title').value }) });
-    $('#s-title').value = ''; loadSections();
-  } catch(e) { alert(e.message); }
+    $('#s-title').value = ''; notify('章节已添加', 'success'); loadSections();
+  } catch(e) { notify(e.message, 'error'); }
 }
 async function renameSection(id) {
-  const t = prompt('新章节标题：');
-  if (t) { await api('/api/sections/' + id, { method:'PUT', body: JSON.stringify({ title: t }) }); loadSections(); }
+  const current = ((await api('/api/sections')).find(s => s.id === id) || {}).title || '';
+  const title = await askInput('重命名章节', `章节 #${id} 的原标题：${current}`, '新标题', current, '保存');
+  if (title === null) return;
+  await guard(async () => {
+    await api('/api/sections/' + id, { method:'PUT', body: JSON.stringify({ title }) });
+    notify('章节已重命名', 'success');
+    await loadSections();
+  });
 }
 async function deleteSection(id) {
-  if (confirm('删除该章节？')) { await api('/api/sections/' + id, { method:'DELETE' }); loadSections(); }
+  await guard(async () => {
+    const sections = await api('/api/sections');
+    const section = sections.find(s => s.id === id);
+    let bound = 0;
+    try { bound = (await api('/api/sections/' + id + '/cards')).length; } catch (_) { /* 计数失败不阻塞删除 */ }
+    const ok = await confirmAction(
+      '删除章节',
+      `将删除章节「${section ? section.title : '#' + id}」，并解绑 ${bound} 张已挂载卡片。\n` +
+      '删除只影响当前活动投影；协作历史与标签快照不受影响，仍可恢复内容。',
+      '删除', true);
+    if (!ok) return;
+    await api('/api/sections/' + id, { method:'DELETE' });
+    notify('章节已删除', 'success');
+    await Promise.all([loadSections(), loadCards()]);
+  });
 }
 async function suggestSections() {
-  const r = await api('/api/sections/suggest', { method:'POST' });
-  if (r.suggested.length) alert('已生成默认框架：' + r.suggested.join('、'));
-  else alert(r.note || '已有章节');
-  loadSections();
+  await guard(async () => {
+    const r = await api('/api/sections/suggest', { method:'POST' });
+    if (r.suggested.length) notify('已生成默认框架：' + r.suggested.join('、'), 'success');
+    else notify(r.note || '已有章节，未作改动', 'info');
+    await loadSections();
+  });
 }
 async function showSectionCards(id) {
-  const cs = await api('/api/sections/' + id + '/cards');
-  $('#section-cards').innerHTML = cs.length ? cs.map(c =>
-    `<div class="section-item"><span class="title"><b>${esc(c.field)}</b> · ${esc(c.claim)}</span>
-     <span class="muted">《${esc(c.paper_title)}》</span></div>`).join('')
-    : '<span class="muted">该章节暂无绑定卡片（在"提取与核验"中把已核验卡片挂到章节）。</span>';
+  await guard(async () => {
+    const cs = await api('/api/sections/' + id + '/cards');
+    $('#section-cards').innerHTML = cs.length ? cs.map(c =>
+      `<div class="section-item"><span class="title"><b>${esc(c.field)}</b> · ${esc(c.claim)}</span>
+       <span class="muted">《${esc(c.paper_title)}》</span></div>`).join('')
+      : '<span class="muted">该章节暂无绑定卡片（在"提取与核验"中把已核验卡片挂到章节）。</span>';
+  });
 }
 
 
 // ---- 协作与版本（数据库 ChangeUnit，不依赖 Git 命令） ----
 const collab = { branches: [], branchId: null, units: {}, mr: null };
 async function guard(fn) {
-  try { return await fn(); } catch (e) { alert(e.message); console.error(e); }
+  try { return await fn(); } catch (e) { notify(e.message || String(e), 'error'); console.error(e); }
 }
 const fmt = value => value === null || value === undefined ? '（不存在 / 删除）' :
   (typeof value === 'string' ? value : JSON.stringify(value, null, 2));
@@ -424,9 +630,9 @@ async function loadBranch(id) {
 
 async function commitChanges(message, changes) {
   const author = $('#g-author').value.trim();
-  if (!author) throw new Error('请填写提交作者');
+  if (!author) throw new Error('请填写提交作者（可用顶部"当前身份"统一设置）');
   await api('/api/branches/' + selectedBranchId() + '/commits', { method:'POST', body: JSON.stringify({author, message, changes}) });
-  alert('提交成功；工作分支已前进，尚未改动的内容仍保持原版本。');
+  notify('提交成功：工作分支已前进，主干不受影响', 'success');
   await loadCollaboration();
 }
 async function commitCard() {
@@ -459,10 +665,14 @@ async function loadHistory() {
   </div>`).join('') : '<span class="muted">暂无提交。</span>';
 }
 async function revertCommit(id) {
-  const reason = prompt('回滚会产生一个新提交，不会删除历史。\n只有目标单元未被后续修改时才允许回滚。\n请输入原因：', '撤销提交 #' + id);
+  const reason = await askInput(
+    '回滚提交 #' + id,
+    '回滚会生成一个反向提交，不会删除历史；只有该单元未被后续提交修改时才允许回滚。',
+    '回滚原因', '撤销提交 #' + id, '创建回滚提交');
   if (reason === null) return;
   await api('/api/commits/' + id + '/revert', { method:'POST', body: JSON.stringify({author:$('#g-author').value.trim(), reason}) });
-  alert('回滚提交已创建'); await loadCollaboration();
+  notify('回滚提交已创建', 'success');
+  await loadCollaboration();
 }
 
 async function openMergeRequest() {
@@ -566,9 +776,14 @@ async function resolveConflict(id, resolution) {
 }
 async function mergeMergeRequest() {
   const m = requireMergeRequest();
-  if (!confirm('确认将 MR !' + m.id + ' 合并到目标分支？系统将校验最新审核、冲突状态和证据摘录。')) return;
+  const ok = await confirmAction(
+    '合并 MR !' + m.id,
+    `目标分支：${branchName(m.target_branch_id)}；需要 ${m.required_approvals} 位非作者批准。\n` +
+    '合并前系统会再次校验最新审核、冲突状态与全部已核验卡片的摘录子串。',
+    '合并');
+  if (!ok) return;
   await api('/api/merge-requests/' + m.id + '/merge', { method:'POST', body: JSON.stringify({actor:$('#g-mr-actor').value.trim()}) });
-  alert('合并成功，目标分支生成新的合并提交。');
+  notify('合并成功：目标分支已生成合并提交', 'success');
   await loadCollaboration(); await loadCards(); await loadSections();
 }
 
@@ -577,6 +792,7 @@ async function createTag() {
   await api('/api/tags', { method:'POST', body: JSON.stringify({
     name:$('#g-tag-name').value.trim(), commit_id:main.head_commit_id, author:$('#g-tag-author').value.trim()
   }) });
+  notify('标签已固定到主干当前提交', 'success');
   $('#g-tag-name').value = ''; await loadTags();
 }
 async function loadTags() {
@@ -591,7 +807,9 @@ async function showTag(id) {
     <details><summary>展开完整快照 JSON</summary><pre class="code">${esc(JSON.stringify(t.snapshot, null, 2))}</pre></details>`;
 }
 
-loadPapers(); loadTemplates(); loadCards(); loadSections(); guard(loadCollaboration);
+bindIdentities();
+guard(async () => { await Promise.all([loadPapers(), loadTemplates(), loadCards(), loadSections()]); });
+guard(loadCollaboration);
 </script>
 </body>
 </html>

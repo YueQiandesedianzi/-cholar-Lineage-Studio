@@ -1202,6 +1202,50 @@ class CollaborationApiTest(unittest.TestCase):
         root = self.get_commit(self.branch_head(self.main()))
         self.assert_snapshot_content(root["snapshot"], card_id, "claim", original_claim)
 
+    def test_verify_decision_can_be_reopened_and_changed(self):
+        """核验结论可撤回、可改判：避免误点后只能删库重来。"""
+        excerpt = "Reopening a verification decision must stay possible."
+        template_id = self.entity_id(
+            self.api_json(
+                "POST",
+                "/api/templates",
+                expected=201,
+                json={"name": "撤回核验模板", "fields": ["结论"]},
+            ),
+            "template",
+        )
+        self.api_json("POST", "/api/templates/%d/activate" % template_id)
+        paper_id = self.entity_id(
+            self.api_json(
+                "POST",
+                "/api/papers",
+                expected=201,
+                json={"title": "reopen paper", "abstract": excerpt},
+            ),
+            "paper",
+        )
+        self.api_json(
+            "POST", "/api/extract", json={"paper_id": paper_id, "template_id": template_id}
+        )
+        card_id = self.api_json("GET", "/api/cards?paper_id=%d" % paper_id)[0]["id"]
+
+        def status_of():
+            return self.api_json("GET", "/api/cards?paper_id=%d" % paper_id)[0]["status"]
+
+        self.api_json("POST", "/api/cards/%d/verify" % card_id, json={"action": "reject"})
+        self.assertEqual(status_of(), "rejected")
+        # 误判后可以直接改判通过（摘录确为原文子串）
+        self.api_json("POST", "/api/cards/%d/verify" % card_id, json={"action": "approve"})
+        self.assertEqual(status_of(), "verified")
+        # 也可以撤回核验，回到待核验继续处理
+        self.api_json("POST", "/api/cards/%d/verify" % card_id, json={"action": "reset"})
+        self.assertEqual(status_of(), "pending")
+        self.assert_error(
+            self.client.post("/api/cards/%d/verify" % card_id, json={"action": "unknown"}),
+            expected=400,
+        )
+        self.assertEqual(status_of(), "pending")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -167,7 +167,7 @@ Content-Type: application/json
 | POST | `/api/templates/<id>/activate` | 切换生效模板 |
 | POST | `/api/extract` | 按模板对文献做 Mock 规则抽取 |
 | GET | `/api/cards` | 证据卡片列表 |
-| POST | `/api/cards/<id>/verify` | 通过 / 驳回 / 修订（含摘录子串校验） |
+| POST | `/api/cards/<id>/verify` | 通过 / 驳回 / 修订 / 退回待核验（通过类动作含摘录子串校验） |
 | GET / POST | `/api/sections` | 章节树读取 / 新增 |
 | PUT / DELETE | `/api/sections/<id>` | 章节重命名 / 删除 |
 | POST | `/api/sections/suggest` | 生成初始章节建议 |
