@@ -114,6 +114,14 @@
   @keyframes flash { 0% { box-shadow:0 0 0 4px #fde68a; } 100% { box-shadow:none; } }
   .two-col { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:6px; }
   @media (max-width:700px) { .two-col { grid-template-columns:1fr; } }
+
+  /* 批量提取与导入 */
+  .progress { height:6px; background:#e2e8f0; border-radius:999px; overflow:hidden; margin:10px 0; }
+  .progress span { display:block; height:100%; width:0; background:var(--blue); transition:width .2s; }
+  .list-check { display:flex; gap:8px; align-items:flex-start; padding:6px 0; border-bottom:1px dashed var(--line); cursor:pointer; }
+  .list-check input { margin-top:4px; }
+  .result-list { margin:6px 0 0; padding-left:18px; }
+  .result-list li { font-size:12px; color:#475569; margin:2px 0; }
 </style>
 </head>
 <body>
@@ -135,6 +143,27 @@
 <main>
   <!-- 文献 -->
   <section id="papers" class="panel active">
+    <div class="card">
+      <h2>批量导入题录</h2>
+      <div class="hint">支持 BibTeX / RIS 文本，或一行一个 DOI（勾选联网时用 Crossref 补全题录；取不到会列出来让你手工补全）。重复项按 DOI 或标题自动跳过，不会重复建库。</div>
+      <div class="row">
+        <select id="imp-format" aria-label="题录格式">
+          <option value="bibtex">BibTeX</option>
+          <option value="ris">RIS</option>
+          <option value="doi">DOI 列表</option>
+        </select>
+        <label class="muted"><input type="checkbox" id="imp-resolve" checked> DOI 联网补全</label>
+        <input type="file" id="imp-file" accept=".bib,.ris,.txt" style="flex:0 0 auto" aria-label="选择题录文件">
+        <button class="small" onclick="guard(loadImportFile)">读取文件</button>
+      </div>
+      <textarea id="imp-text" placeholder="在此粘贴 BibTeX / RIS / DOI 列表…"></textarea>
+      <div class="row" style="margin-top:8px">
+        <button class="primary" onclick="guard(importReferences)">导入</button>
+        <button class="small" onclick="document.getElementById('imp-text').value = ''; document.getElementById('imp-result').innerHTML = '';">清空</button>
+        <span class="muted" id="imp-summary"></span>
+      </div>
+      <div id="imp-result"></div>
+    </div>
     <div class="card">
       <h2>导入文献（标题 + 摘要）</h2>
       <div class="hint">MVP 以"摘要"作为可抽取全文；摘录字段保证是摘要的真实子串。</div>
@@ -167,6 +196,20 @@
         <select id="e-template" style="flex:1"></select>
         <button class="primary" onclick="runExtract()">提取证据卡片</button>
       </div>
+    </div>
+    <div class="card">
+      <h2>批量提取</h2>
+      <div class="hint">选择多篇文献与一个模板后顺序提取；已提取过的文献会标注卡片数，避免重复。</div>
+      <div class="row">
+        <select id="bx-template" style="flex:1" aria-label="批量提取模板"></select>
+        <label class="muted"><input type="checkbox" id="bx-only-empty" checked> 只选还没有卡片的文献</label>
+        <button class="small" onclick="toggleAllPapers(true)">全选</button>
+        <button class="small" onclick="toggleAllPapers(false)">全不选</button>
+        <button class="primary" onclick="guard(bulkExtract)">批量提取</button>
+      </div>
+      <div id="bx-papers" class="scroll" style="max-height:220px"></div>
+      <div class="progress" id="bx-progress" hidden><span></span></div>
+      <div class="muted" id="bx-summary"></div>
     </div>
     <div class="card">
       <h2>证据卡片（核验：通过 / 驳回 / 修订）</h2>
@@ -218,6 +261,16 @@
       <div id="section-list"></div>
     </div>
     <div class="card"><h2>章节下的卡片</h2><div id="section-cards"><span class="muted">点击左侧章节查看其绑定的卡片。</span></div></div>
+    <div class="card">
+      <h2>导出与交付</h2>
+      <div class="hint">导出前自动校验：所有「已核验」卡片的摘录必须是来源原文子串；不通过会阻止导出并列出问题卡片（可强制导出，稿首会标注风险）。</div>
+      <div class="actions">
+        <button class="primary" onclick="guard(exportMarkdown)">导出 Markdown 证据稿</button>
+        <button class="small" onclick="guard(() => exportFile('/api/export/cards.csv'))">证据表 CSV</button>
+        <button class="small" onclick="guard(() => exportFile('/api/export/cards.json'))">结构化 JSON</button>
+      </div>
+      <div id="export-result"></div>
+    </div>
   </section>
 
   <!-- Git 式协作与版本 -->
@@ -428,6 +481,18 @@ const confirmAction = (title, body, confirmText = '确定', danger = false) =>
 const askInput = (title, body, label, value, confirmText = '确认') =>
   openModal({ title, body, input: { label, value }, confirmText }).then(v => (typeof v === 'string' ? v : null));
 
+// ---------------- 通用：剪贴板兜底 ----------------
+// 剪贴板写入可能因权限或窗口未聚焦被拒绝，统一兜底，避免冒泡成未处理异常
+function copyText(text, okMessage) {
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text)
+      .then(() => { if (okMessage) notify(okMessage, 'success'); })
+      .catch(() => notify('浏览器拒绝了自动复制（窗口未聚焦或缺少权限）；可手动选中文本复制', 'info'));
+  } else {
+    notify('当前浏览器不支持自动复制；可手动选中文本复制', 'info');
+  }
+}
+
 // ---------------- 身份记忆 ----------------
 const IDENTITY_KEY = 'reviewgit.identity';
 const identity = (() => {
@@ -490,13 +555,68 @@ async function api(path, opts = {}) {
 }
 
 // ---- 文献 ----
+const paperState = { papers: [] };
 async function loadPapers() {
   const ps = await api('/api/papers');
+  paperState.papers = ps;
   $('#paper-list').innerHTML = ps.length ? ps.map(p => `
     <div class="section-item"><span class="title"><b>#${p.id}</b> ${esc(p.title)}</span>
-      <span class="muted">${esc(p.year||'')}</span></div>`).join('') : '<span class="muted">暂无文献。</span>';
+      <span class="muted">${esc(p.year || '')}${p.doi ? ' · ' + esc(p.doi) : ''}</span></div>`).join('') : '<span class="muted">暂无文献。</span>';
   const sel = $('#e-paper');
   sel.innerHTML = ps.map(p => `<option value="${p.id}">#${p.id} ${esc(p.title)}</option>`).join('');
+  const bulkTemplate = $('#bx-template');
+  if (bulkTemplate && !bulkTemplate.options.length) {
+    bulkTemplate.innerHTML = (await api('/api/templates')).map(t =>
+      `<option value="${t.id}">${esc(t.name)}${t.is_active ? '（生效）' : ''}</option>`).join('');
+  }
+  renderBulkPapers();
+}
+
+// ---- 题录导入 ----
+async function loadImportFile() {
+  const input = $('#imp-file');
+  if (!input.files || !input.files[0]) { notify('请先选择一个题录文件（.bib / .ris / .txt）', 'info'); return; }
+  const file = input.files[0];
+  const text = await file.text();
+  $('#imp-text').value = text;
+  notify(`已读取 ${file.name}（${text.length} 字符）`, 'success');
+}
+async function importReferences() {
+  const text = $('#imp-text').value.trim();
+  if (!text) throw new Error('请粘贴题录内容或先读取文件');
+  const result = await api('/api/papers/import', { method: 'POST', body: JSON.stringify({
+    format: $('#imp-format').value, text,
+    resolve_doi: $('#imp-resolve').checked,
+    actor: $('#me').value.trim() || '未署名',
+  }) });
+  renderImportResult(result);
+  const s = result.summary;
+  notify(`导入完成：新建 ${s.created} · 跳过重复 ${s.skipped} · 待补全 ${s.failed}`,
+    s.failed ? 'info' : 'success');
+  await Promise.all([loadPapers(), loadCards()]);
+}
+function renderImportResult(result) {
+  const blocks = [];
+  if (result.created.length) {
+    blocks.push(`<div><b>已新建 ${result.created.length} 篇</b><ul class="result-list">` +
+      result.created.map(item => `<li>#${item.id} ${esc(item.title)}</li>`).join('') + '</ul></div>');
+  }
+  if (result.skipped.length) {
+    blocks.push(`<div><b>跳过 ${result.skipped.length} 篇（重复）</b><ul class="result-list">` +
+      result.skipped.map(item => `<li>${esc(item.title || item.doi)} —— ${esc(item.reason)}</li>`).join('') + '</ul></div>');
+  }
+  if (result.failed.length) {
+    blocks.push(`<div><b>待手工补全 ${result.failed.length} 条</b><ul class="result-list">` +
+      result.failed.map(item => `<li>${esc(item.doi || item.manual.title)} —— ${esc(item.reason)}
+        <button class="small" onclick="fillManualDoi('${esc(item.doi)}')">填到单篇导入</button></li>`).join('') + '</ul></div>');
+  }
+  $('#imp-result').innerHTML = blocks.join('') || '<p class="muted">没有变化。</p>';
+  $('#imp-summary').textContent = `新建 ${result.summary.created} · 跳过 ${result.summary.skipped} · 待补全 ${result.summary.failed}`;
+}
+function fillManualDoi(doi) {
+  $('#p-doi').value = doi;
+  $('#p-title').focus();
+  notify('已把 DOI 填到单篇导入；请补充标题与摘要后导入', 'info');
 }
 async function addPaper() {
   const title = $('#p-title').value.trim();
@@ -546,6 +666,71 @@ async function runExtract() {
     notify(`已生成 ${r.created} 张证据卡片`, 'success');
     loadCards();
   } catch(e) { notify(e.message, 'error'); }
+}
+
+// ---- 批量提取 ----
+function renderBulkPapers() {
+  const container = $('#bx-papers');
+  if (!container) return;
+  const counts = {};
+  cardState.cards.forEach(card => { counts[card.paper_id] = (counts[card.paper_id] || 0) + 1; });
+  const onlyEmpty = $('#bx-only-empty') && $('#bx-only-empty').checked;
+  const papers = paperState.papers || [];
+  if (!papers.length) {
+    container.innerHTML = '<span class="muted">还没有文献；请先在「文献」页导入题录。</span>';
+    return;
+  }
+  container.innerHTML = papers.map(paper => {
+    const count = counts[paper.id] || 0;
+    const checked = onlyEmpty ? !count : count > 0;
+    return `<label class="list-check">
+      <input type="checkbox" class="bx-paper" value="${paper.id}" ${checked ? 'checked' : ''}>
+      <span>#${paper.id} ${esc(paper.title)}
+        <span class="muted">${count ? `已有 ${count} 张卡片` : '尚未提取'}</span></span>
+    </label>`;
+  }).join('');
+}
+function toggleAllPapers(checked) {
+  document.querySelectorAll('.bx-paper').forEach(box => { box.checked = checked; });
+}
+async function bulkExtract() {
+  const ids = [...document.querySelectorAll('.bx-paper:checked')].map(box => +box.value);
+  if (!ids.length) throw new Error('请先勾选要提取的文献');
+  const templateId = +$('#bx-template').value;
+  if (!templateId) throw new Error('请先选择提取模板（可在「提取模板」页创建）');
+  const total = ids.length;
+  const progress = $('#bx-progress');
+  const bar = progress.querySelector('span');
+  progress.hidden = false;
+  bar.style.width = '0%';
+  let done = 0, created = 0;
+  const failed = [];
+  const queue = ids.slice();
+  const runner = async () => {
+    while (queue.length) {
+      const paperId = queue.shift();
+      try {
+        const response = await api('/api/extract', { method:'POST', body: JSON.stringify({
+          paper_id: paperId, template_id: templateId }) });
+        created += response.created;
+      } catch (e) {
+        failed.push({ id: paperId, message: e.message });
+      }
+      done += 1;
+      bar.style.width = Math.round((done / total) * 100) + '%';
+      $('#bx-summary').textContent = `进度 ${done}/${total} · 已新增 ${created} 张卡片`;
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(3, total) }, runner));
+  $('#bx-summary').textContent = `完成 ${total} 篇：新增 ${created} 张卡片`
+    + (failed.length ? ` · 失败 ${failed.length} 篇` : '');
+  if (failed.length) {
+    notify('批量提取有失败：\n' + failed.slice(0, 6).map(f => `#${f.id} ${f.message}`).join('\n'), 'error');
+  } else {
+    notify(`批量提取完成：${total} 篇共新增 ${created} 张卡片`, 'success');
+  }
+  await Promise.all([loadCards(), loadPapers()]);
+  setTimeout(() => { progress.hidden = true; }, 1200);
 }
 const cardState = {
   cards: [], sections: [], page: 1, pageSize: 50, focusIndex: 0,
@@ -906,6 +1091,16 @@ function bindCardToolbar() {
     renderCards();
   });
   $('#card-select-all').addEventListener('change', (event) => toggleSelectAllFiltered(event.target.checked));
+  const onlyEmpty = $('#bx-only-empty');
+  if (onlyEmpty) onlyEmpty.addEventListener('change', renderBulkPapers);
+  const importFormat = $('#imp-format');
+  if (importFormat) importFormat.addEventListener('change', () => {
+    const isDoi = importFormat.value === 'doi';
+    $('#imp-resolve').disabled = !isDoi;
+    $('#imp-text').placeholder = isDoi
+      ? '每行一个 DOI，例如 10.1016/j.polymer.2019.121645'
+      : (importFormat.value === 'ris' ? '粘贴 RIS 文本（TY  - ... ER  - ）' : '粘贴 BibTeX 条目（@article{...}）');
+  });
   document.addEventListener('keydown', onCardKeydown);
 }
 
@@ -964,11 +1159,100 @@ async function suggestSections() {
 async function showSectionCards(id) {
   await guard(async () => {
     const cs = await api('/api/sections/' + id + '/cards');
-    $('#section-cards').innerHTML = cs.length ? cs.map(c =>
-      `<div class="section-item"><span class="title"><b>${esc(c.field)}</b> · ${esc(c.claim)}</span>
-       <span class="muted">《${esc(c.paper_title)}》</span></div>`).join('')
-      : '<span class="muted">该章节暂无绑定卡片（在"提取与核验"中把已核验卡片挂到章节）。</span>';
+    const verified = cs.filter(card => card.status === 'verified');
+    sectionMaterial[id] = { cards: cs, verified };
+    const head = `<div class="row" style="margin-bottom:8px">
+      <span class="muted">${cs.length} 张卡片 · 已核验 ${verified.length} 张</span>
+      <button class="small" onclick="copySectionMaterial(${id})" ${verified.length ? '' : 'disabled'}>复制本节 Markdown 素材</button>
+    </div>`;
+    const body = cs.length ? cs.map(c => `
+      <div class="section-item" style="align-items:flex-start">
+        <span class="badge ${c.status}">${statusLabel(c.status)}</span>
+        <span class="title"><b>${esc(c.field)}</b> · ${esc(c.claim)}
+          <div class="muted">原文摘录：${esc(c.excerpt)}</div>
+          <div class="muted">《${esc(c.paper_title)}》</div></span>
+      </div>`).join('')
+      : '<span class="muted">该章节暂无绑定卡片（在「提取与核验」中把已核验卡片挂到章节）。</span>';
+    $('#section-cards').innerHTML = head + body;
   });
+}
+const sectionMaterial = {};
+function copySectionMaterial(id) {
+  const material = sectionMaterial[id];
+  const section = cardState.sections.find(s => s.id === id) || { title: '#' + id };
+  if (!material || !material.verified.length) { notify('本节还没有已核验卡片', 'info'); return; }
+  const lines = [`## ${section.title}`, ''];
+  material.verified.forEach(card => {
+    lines.push(`- **${card.field}**：${card.claim}`);
+    lines.push(`  - 原文摘录：${card.excerpt}`);
+    lines.push(`  - 来源：${card.paper_title}`);
+  });
+  const text = lines.join('\n');
+  copyText(text, `已复制本节素材（${material.verified.length} 张已核验卡片，${text.length} 字符）`);
+}
+
+// ---- 导出 ----
+function filenameFromResponse(response) {
+  const disposition = response.headers.get('Content-Disposition') || '';
+  const match = /filename\*=UTF-8''([^;]+)/i.exec(disposition);
+  if (!match) return '';
+  try { return decodeURIComponent(match[1]); } catch (_) { return match[1]; }
+}
+function downloadBlob(blob, name) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = name;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
+}
+async function exportFile(url) {
+  const response = await fetch(url);
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    throw new Error(data.error || ('导出失败：HTTP ' + response.status));
+  }
+  const blob = await response.blob();
+  const name = filenameFromResponse(response) || 'reviewgit-export';
+  downloadBlob(blob, name);
+  notify(`已下载 ${name}（${Math.round(blob.size / 1024)} KB）`, 'success');
+}
+async function exportMarkdown(force = false) {
+  const response = await fetch('/api/export/markdown' + (force ? '?force=1' : ''));
+  if (response.status === 409) {
+    const data = await response.json();
+    renderExportProblems(data);
+    notify(data.error, 'error');
+    return;
+  }
+  if (!response.ok) throw new Error('导出失败：HTTP ' + response.status);
+  const blob = await response.blob();
+  const name = filenameFromResponse(response) || 'reviewgit-evidence.md';
+  downloadBlob(blob, name);
+  $('#export-result').innerHTML = `<p class="muted">已下载 ${esc(name)}（${Math.round(blob.size / 1024)} KB）</p>`;
+  notify('已导出 Markdown 证据稿', 'success');
+}
+function renderExportProblems(data) {
+  $('#export-result').innerHTML = `<div class="hint">${esc(data.error)}<br>${esc(data.hint || '')}</div>
+    <table><tr><th>卡片</th><th>字段</th><th>摘录</th><th>处理</th></tr>
+    ${data.problems.map(item => `<tr><td>#${item.card_id}</td><td>${esc(item.field)}</td>
+      <td>${esc(String(item.excerpt).slice(0, 60))}</td>
+      <td><button class="small" onclick="goFixCard(${item.card_id})">去修正</button></td></tr>`).join('')}
+    </table>
+    <div class="actions"><button class="small warn" onclick="guard(() => exportMarkdown(true))">仍然强制导出</button></div>`;
+}
+function goFixCard(id) {
+  document.querySelector('nav button[data-tab=extract]').click();
+  Object.assign(cardState.filters, { q: '', status: '', paper: '', field: '', section: '' });
+  cardState.page = 1;
+  const index = filteredCards().findIndex(card => card.id === id);
+  cardState.focusIndex = index >= 0 ? index : 0;
+  cardState.page = Math.floor(cardState.focusIndex / cardState.pageSize) + 1;
+  renderCardFilters();
+  renderCards();
+  focusStep('card-item-' + id);
 }
 
 
@@ -1205,8 +1489,7 @@ function copyUnitKey(selector) {
   const target = typeof selector === 'string' ? $(selector) : $('#g-commit-unit-key');
   const value = (target && target.value || '').trim();
   if (!value) { notify('当前没有可复制的单元标识', 'info'); return; }
-  if (navigator.clipboard) navigator.clipboard.writeText(value);
-  notify(`已复制：${value}`, 'success');
+  copyText(value, `已复制：${value}`);
 }
 async function commitPicked() {
   const kind = $('#g-commit-type').value;

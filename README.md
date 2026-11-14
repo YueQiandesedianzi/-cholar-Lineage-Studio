@@ -103,6 +103,8 @@ python scripts/launch.py --host 0.0.0.0  # 换监听地址（默认 127.0.0.1）
 
 **证据链**
 
+- **题录导入**：粘贴 BibTeX / RIS，或一行一个 DOI（Crossref 联网补全，失败会列出待手工补全项）；按 DOI 或标题自动去重。也支持单篇手工录入标题与摘要。
+- **批量提取**：多选文献 + 一个模板顺序提取，带进度与逐条失败汇总。
 - **文献与模板建库**：按标题、作者、年份、DOI、摘要建立文献；自定义字段模板并选择生效口径。当前以摘要作为演示全文，**不冒充 PDF 全文解析**。
 - **证据卡片与章节组织**：区分论断与逐字摘录，记录来源、状态与自定义字段；支持通过、驳回、修订，以及把已核验卡片挂到章节。
 - **原文摘录硬闸门**：人工通过与修订核验会检查摘录是否为原文子串；向 `main` 合并时**再次**检查所有已核验卡片——未通过原文校验的摘录不能被标为已核验。
@@ -121,6 +123,7 @@ python scripts/launch.py --host 0.0.0.0  # 换监听地址（默认 127.0.0.1）
 
 **工程**
 
+- **导出交付**：Markdown 证据稿（章节树 + 已核验卡片 + 参考文献 + 未采用卡片清单）、CSV 证据表、结构化 JSON。**导出前自动校验**：已核验卡片的摘录必须是来源原文子串，不通过会阻止导出并列出问题卡片（可强制导出，稿首标注风险）。
 - **自包含、可移植**：运行时路径由 `__file__` 推导，可用 `REVIEWGIT_DB` 指向任意数据库；分发包不含数据库或缓存。
 - **零构建前端**：原生 HTML / CSS / JS 单页，无 npm、无构建步骤、无外部 CDN。
 
@@ -170,6 +173,10 @@ Content-Type: application/json
 | GET / POST | `/api/templates` | 提取模板列表 / 新增模板 |
 | POST | `/api/templates/<id>/activate` | 切换生效模板 |
 | POST | `/api/extract` | 按模板对文献做 Mock 规则抽取 |
+| POST | `/api/papers/import` | 导入 BibTeX / RIS / DOI 列表（按 DOI 或标题去重） |
+| GET | `/api/export/markdown` | 导出 Markdown 证据稿（导出前校验摘录；`force=1` 可强制） |
+| GET | `/api/export/cards.csv` | 导出证据表 CSV |
+| GET | `/api/export/cards.json` | 导出结构化 JSON（文献 + 卡片 + 章节） |
 | GET | `/api/cards` | 证据卡片列表 |
 | POST | `/api/cards/<id>/verify` | 通过 / 驳回 / 修订 / 退回待核验（通过类动作含摘录子串校验） |
 | GET / POST | `/api/sections` | 章节树读取 / 新增 |
@@ -293,8 +300,10 @@ reviewgit/
 │   ├── launch.py                    # 启动服务（支持 --seed / --host / --port）
 │   └── package.py                   # 重建分发快照，排除运行时文件
 └── web/
-    ├── app.py                       # Flask 入口：内容 API 与核验校验
+    ├── app.py                       # Flask 入口：内容 API、导入 / 导出与核验校验
     ├── collaboration.py             # ChangeUnit / DAG / MR / 冲突 / 标签 / 回滚 / 审计
+    ├── importer.py                  # BibTeX / RIS / DOI 题录解析与去重键
+    ├── exporter.py                  # Markdown / CSV / JSON 导出与摘录自检
     ├── seed.py                      # 聚酰亚胺建模演示语料
     ├── requirements.txt             # flask>=3.0
     ├── templates/index.html         # 五个标签页的原生 HTML/JS 界面

@@ -8,10 +8,14 @@ import os
 import re
 import json
 import sqlite3
+from datetime import datetime
+from urllib.parse import quote
 
-from flask import Flask, g, jsonify, request, render_template
+from flask import Flask, Response, g, jsonify, request, render_template
 
 from collaboration import COLLABORATION_SCHEMA, record_audit, register_collaboration
+from exporter import build_csv, build_markdown, find_substring_violations
+from importer import clean_entry, dedupe_key, fetch_crossref, parse_bibtex, parse_doi_lines, parse_ris
 
 DB_PATH = os.environ.get(
     "REVIEWGIT_DB",
@@ -377,6 +381,154 @@ def section_cards(sid):
         "JOIN papers p ON p.id = c.paper_id WHERE cs.section_id = ? ORDER BY c.id", (sid,)
     ).fetchall()
     return jsonify([dict(r) for r in rows])
+
+
+# ---------- 题录导入 ----------
+
+def _existing_keys(db):
+    keys = set()
+    for row in db.execute("SELECT title, doi FROM papers"):
+        keys.add(dedupe_key({"doi": row["doi"], "title": row["title"]}))
+    return keys
+
+
+def _insert_paper(db, entry):
+    cursor = db.execute(
+        "INSERT INTO papers (title, authors, year, doi, abstract) VALUES (?,?,?,?,?)",
+        (entry["title"], entry["authors"], entry["year"], entry["doi"], entry["abstract"]),
+    )
+    return cursor.lastrowid
+
+
+@app.route("/api/papers/import", methods=["POST"])
+def import_papers():
+    d = request.get_json(force=True, silent=True) or {}
+    fmt = (d.get("format") or "bibtex").lower()
+    text = d.get("text") or ""
+    use_network = d.get("resolve_doi", True) is not False
+
+    if fmt == "bibtex":
+        entries = parse_bibtex(text)
+    elif fmt == "ris":
+        entries = parse_ris(text)
+    elif fmt == "doi":
+        entries = [clean_entry({"doi": doi}) for doi in parse_doi_lines(text)]
+    else:
+        return jsonify({"error": "format 必须是 bibtex/ris/doi"}), 400
+    if not entries:
+        return jsonify({"error": "没有解析出任何题录，请检查文本格式"}), 400
+
+    db = get_db()
+    known = _existing_keys(db)
+    created, skipped, failed = [], [], []
+    for entry in entries:
+        key = dedupe_key(entry)
+        if key in known:
+            skipped.append({"title": entry["title"], "doi": entry["doi"],
+                            "reason": "已存在（DOI 或标题重复）"})
+            continue
+        if fmt == "doi":
+            if not use_network:
+                failed.append({"doi": entry["doi"],
+                               "reason": "已关闭联网补全，请手工补全题录",
+                               "manual": entry})
+                continue
+            try:
+                entry = fetch_crossref(entry["doi"])
+            except (OSError, ValueError) as exc:  # 网络不可达 / 响应不是合法 JSON
+                failed.append({"doi": entry["doi"],
+                               "reason": "Crossref 取题录失败：%s" % exc,
+                               "manual": entry})
+                continue
+        if not entry["title"]:
+            failed.append({"doi": entry["doi"], "reason": "缺少标题，无法建库", "manual": entry})
+            continue
+        paper_id = _insert_paper(db, entry)
+        known.add(key)
+        created.append({"id": paper_id, "title": entry["title"], "doi": entry["doi"]})
+    record_audit(db, (d.get("actor") or "").strip() or "未署名", "paper.import", "paper", None, {
+        "format": fmt, "created": len(created), "skipped": len(skipped), "failed": len(failed),
+    })
+    db.commit()
+    return jsonify({
+        "created": created, "skipped": skipped, "failed": failed,
+        "summary": {"created": len(created), "skipped": len(skipped), "failed": len(failed)},
+    }), 201
+
+
+# ---------- 导出 ----------
+
+def _export_context(db):
+    papers = [dict(row) for row in db.execute("SELECT * FROM papers ORDER BY id")]
+    cards = []
+    for row in db.execute(
+        "SELECT c.*, p.title AS paper_title FROM cards c "
+        "JOIN papers p ON p.id = c.paper_id ORDER BY c.id"
+    ):
+        card = dict(row)
+        card["section_ids"] = []
+        cards.append(card)
+    by_id = {card["id"]: card for card in cards}
+    for row in db.execute(
+        "SELECT cs.card_id, cs.section_id FROM card_sections cs ORDER BY cs.section_id"
+    ):
+        if row["card_id"] in by_id:
+            by_id[row["card_id"]]["section_ids"].append(row["section_id"])
+    sections = [dict(row) for row in db.execute("SELECT * FROM sections ORDER BY ord, id")]
+    mounted = {}
+    for card in cards:
+        if card["status"] != "verified":
+            continue
+        for section_id in card["section_ids"]:
+            mounted.setdefault(section_id, []).append(card)
+    text_by_paper = {paper["id"]: (paper["full_text"] or paper["abstract"] or "")
+                     for paper in papers}
+    return papers, cards, sections, mounted, text_by_paper
+
+
+def _attachment(payload, filename, mimetype):
+    encoded = quote(filename.encode("utf-8"))
+    disposition = "attachment; filename=%s; filename*=UTF-8''%s" % (encoded, encoded)
+    return Response(payload, mimetype=mimetype, headers={"Content-Disposition": disposition})
+
+
+@app.route("/api/export/markdown", methods=["GET"])
+def export_markdown():
+    db = get_db()
+    papers, cards, sections, mounted, text_by_paper = _export_context(db)
+    problems = find_substring_violations(cards, text_by_paper)
+    if problems and request.args.get("force") != "1":
+        return jsonify({
+            "error": "有 %d 张已核验卡片的摘录不是来源原文子串，已阻止导出" % len(problems),
+            "problems": problems,
+            "hint": "修正这些卡片，或带 force=1 强制导出（导出稿会标注该风险）。",
+        }), 409
+    markdown = build_markdown(papers, cards, sections, mounted,
+                              datetime.now().strftime("%Y-%m-%d %H:%M"))
+    if problems:
+        markdown = ("> ⚠️ 本次为强制导出：有 %d 张已核验卡片的摘录未通过原文子串校验。\n\n"
+                    % len(problems)) + markdown
+    return _attachment(markdown, "reviewgit-evidence.md", "text/markdown; charset=utf-8")
+
+
+@app.route("/api/export/cards.csv", methods=["GET"])
+def export_cards_csv():
+    db = get_db()
+    papers, cards, sections, _mounted, _text = _export_context(db)
+    titles = {section["id"]: section["title"] for section in sections}
+    return _attachment("\ufeff" + build_csv(papers, cards, titles),
+                       "reviewgit-cards.csv", "text/csv; charset=utf-8")
+
+
+@app.route("/api/export/cards.json", methods=["GET"])
+def export_cards_json():
+    db = get_db()
+    papers, cards, sections, _mounted, _text = _export_context(db)
+    payload = json.dumps({
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "papers": papers, "cards": cards, "sections": sections,
+    }, ensure_ascii=False, indent=2)
+    return _attachment(payload, "reviewgit-cards.json", "application/json; charset=utf-8")
 
 
 # 协作引擎独立维护 ChangeUnit 历史；常规列表是 main 的活动投影。

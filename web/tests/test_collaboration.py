@@ -1342,6 +1342,175 @@ class CollaborationApiTest(unittest.TestCase):
         self.assertEqual(assign_entries[0]["actor"], "李四")
         self.assertEqual(assign_entries[0]["details"]["section_id"], section_id)
 
+    # ---------- 题录导入 / 导出 ----------
+
+    BIBTEX_SAMPLE = """@article{chen2024pi,
+      title = {Machine learning for polyimide design},
+      author = {Chen, Wei and Liu, Yan},
+      journal = {Polymer},
+      year = {2024},
+      doi = {10.1000/pi.2024.001},
+      abstract = {We collect 1261 polyimides and train a gradient boosting model.}
+    }
+
+    @inproceedings{liu2023md,
+      title = "Molecular dynamics of polyurethane",
+      author = {Liu, Yan},
+      year = {2023},
+      abstract = {MD simulations reproduce the experimental modulus.}
+    }
+    """
+
+    RIS_SAMPLE = """TY  - JOUR
+TI  - Data-efficient learning of polymer properties
+AU  - Zhang, San
+AU  - Wang, Si
+PY  - 2022
+DO  - 10.1000/poly.2022.777
+AB  - A data-efficient workflow is proposed.
+ER  -
+"""
+
+    def test_bibtex_import_parses_fields_and_dedupes(self):
+        first = self.api_json(
+            "POST", "/api/papers/import", expected=201,
+            json={"format": "bibtex", "text": self.BIBTEX_SAMPLE, "actor": "导入测试"},
+        )
+        self.assertEqual(first["summary"]["created"], 2)
+        titles = [item["title"] for item in first["created"]]
+        self.assertIn("Machine learning for polyimide design", titles)
+        self.assertIn("Molecular dynamics of polyurethane", titles)
+
+        papers = self.api_json("GET", "/api/papers")
+        by_title = {paper["title"]: paper for paper in papers}
+        pi = by_title["Machine learning for polyimide design"]
+        self.assertEqual(pi["authors"], "Chen, Wei; Liu, Yan")
+        self.assertEqual(pi["year"], "2024")
+        self.assertEqual(pi["doi"], "10.1000/pi.2024.001")
+        self.assertIn("1261 polyimides", pi["abstract"])
+
+        # 同一个 BibTeX 再导入一次：全部按 DOI / 标题去重
+        again = self.api_json(
+            "POST", "/api/papers/import", expected=201,
+            json={"format": "bibtex", "text": self.BIBTEX_SAMPLE},
+        )
+        self.assertEqual(again["summary"]["created"], 0)
+        self.assertEqual(again["summary"]["skipped"], 2)
+
+    def test_ris_import_and_doi_import_falls_back_offline(self):
+        ris = self.api_json(
+            "POST", "/api/papers/import", expected=201,
+            json={"format": "ris", "text": self.RIS_SAMPLE},
+        )
+        self.assertEqual(ris["summary"]["created"], 1)
+        paper = self.api_json("GET", "/api/papers")[0]
+        self.assertEqual(paper["authors"], "Zhang, San; Wang, Si")
+        self.assertEqual(paper["year"], "2022")
+        self.assertEqual(paper["doi"], "10.1000/poly.2022.777")
+
+        # DOI 导入：已存在的 DOI 去重，取不到题录的新 DOI 降级为 failed 供手工补全
+        self.api_json("POST", "/api/papers/import", expected=201,
+                      json={"format": "bibtex", "text": self.BIBTEX_SAMPLE})
+        original = self.app_module.fetch_crossref
+
+        def boom(doi, timeout=8):
+            raise OSError("network unreachable")
+
+        self.app_module.fetch_crossref = boom
+        try:
+            doi_result = self.api_json(
+                "POST", "/api/papers/import", expected=201,
+                json={"format": "doi",
+                      "text": "10.1000/pi.2024.001\nhttps://doi.org/10.1000/new.2026.9"},
+            )
+        finally:
+            self.app_module.fetch_crossref = original
+        self.assertEqual(doi_result["summary"]["created"], 0)
+        self.assertEqual(doi_result["summary"]["skipped"], 1)   # 已存在的 DOI
+        self.assertEqual(doi_result["summary"]["failed"], 1)    # 网络不可达的那条
+        self.assertEqual(doi_result["failed"][0]["doi"], "10.1000/new.2026.9")
+        self.assertIn("Crossref", doi_result["failed"][0]["reason"])
+
+    def test_export_markdown_blocks_when_excerpt_is_not_verbatim(self):
+        excerpt = "Verbatim export sentence for the review draft."
+        template_id = self.entity_id(
+            self.api_json("POST", "/api/templates", expected=201,
+                          json={"name": "导出模板", "fields": ["方法"]}),
+            "template",
+        )
+        self.api_json("POST", "/api/templates/%d/activate" % template_id)
+        paper_id = self.entity_id(
+            self.api_json("POST", "/api/papers", expected=201,
+                          json={"title": "export paper", "authors": "Chen, Wei",
+                                "year": "2024", "doi": "10.1000/export",
+                                "abstract": excerpt}),
+            "paper",
+        )
+        self.api_json("POST", "/api/extract",
+                      json={"paper_id": paper_id, "template_id": template_id})
+        card_id = self.api_json("GET", "/api/cards?paper_id=%d" % paper_id)[0]["id"]
+        self.api_json("POST", "/api/cards/%d/verify" % card_id, json={"action": "approve"})
+        section_id = self.entity_id(
+            self.api_json("POST", "/api/sections", expected=201, json={"title": "导出章节"}),
+            "section",
+        )
+        self.api_json("POST", "/api/cards/%d/assign" % card_id, json={"section_id": section_id})
+
+        response = self.client.get("/api/export/markdown")
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("综述证据稿", body)
+        self.assertIn("导出章节", body)
+        self.assertIn("### 卡片 #%d" % card_id, body)
+        self.assertIn(excerpt, body)
+        self.assertIn("DOI: 10.1000/export", body)
+        self.assertIn("text/markdown", response.headers["Content-Type"])
+        self.assertIn("attachment", response.headers["Content-Disposition"])
+
+        # 制造一张"已核验但摘录非原文"的卡片，导出应被拦截，除非 force=1
+        with self.app_module.app.app_context():
+            db = self.app_module.get_db()
+            db.execute("UPDATE cards SET excerpt = ? WHERE id = ?", ("这不是原文子串", card_id))
+            db.commit()
+        blocked = self.client.get("/api/export/markdown")
+        self.assertEqual(blocked.status_code, 409)
+        payload = json.loads(blocked.get_data(as_text=True))
+        self.assertEqual(payload["problems"][0]["card_id"], card_id)
+        forced = self.client.get("/api/export/markdown?force=1")
+        self.assertEqual(forced.status_code, 200)
+        self.assertIn("强制导出", forced.get_data(as_text=True))
+
+    def test_export_csv_and_json_contain_evidence_rows(self):
+        excerpt = "CSV export row sentence."
+        template_id = self.entity_id(
+            self.api_json("POST", "/api/templates", expected=201,
+                          json={"name": "CSV 模板", "fields": ["结论"]}),
+            "template",
+        )
+        self.api_json("POST", "/api/templates/%d/activate" % template_id)
+        paper_id = self.entity_id(
+            self.api_json("POST", "/api/papers", expected=201,
+                          json={"title": "csv paper", "abstract": excerpt}),
+            "paper",
+        )
+        self.api_json("POST", "/api/extract",
+                      json={"paper_id": paper_id, "template_id": template_id})
+        card_id = self.api_json("GET", "/api/cards?paper_id=%d" % paper_id)[0]["id"]
+
+        csv_response = self.client.get("/api/export/cards.csv")
+        self.assertEqual(csv_response.status_code, 200)
+        csv_text = csv_response.get_data(as_text=True)
+        self.assertIn("card_id,status,field,claim", csv_text)
+        self.assertIn("csv paper", csv_text)
+        self.assertTrue(csv_text.startswith("\ufeff"))
+
+        json_response = self.client.get("/api/export/cards.json")
+        self.assertEqual(json_response.status_code, 200)
+        payload = json.loads(json_response.get_data(as_text=True))
+        self.assertEqual(len(payload["cards"]), 1)
+        self.assertEqual(payload["cards"][0]["id"], card_id)
+        self.assertEqual(payload["papers"][0]["title"], "csv paper")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
