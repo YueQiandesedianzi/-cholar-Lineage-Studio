@@ -95,6 +95,25 @@
   .diff-preview { font-size:12px; color:#475569; margin-top:4px; }
   .kbd { border:1px solid #cbd5e1; border-bottom-width:2px; border-radius:4px; padding:0 4px;
          font-family:ui-monospace,Consolas,monospace; font-size:11px; background:#fff; }
+
+  /* 五步向导 */
+  .steps { list-style:none; margin:0; padding:0; display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); gap:8px; }
+  .step { border:1px solid var(--line); border-radius:8px; background:#fff; }
+  .step.done { border-color:#bbf7d0; background:#f0fdf4; }
+  .step.current { border-color:var(--blue); background:#eff6ff; box-shadow:0 0 0 2px #bfdbfe inset; }
+  .step.blocked { border-color:#e2e8f0; background:#f8fafc; opacity:.85; }
+  .step-jump { display:flex; gap:8px; width:100%; text-align:left; background:transparent; border:0;
+               padding:10px; cursor:pointer; font:inherit; color:inherit; }
+  .step-no { flex:0 0 22px; width:22px; height:22px; border-radius:50%; background:#e2e8f0; color:#475569;
+             display:flex; align-items:center; justify-content:center; font-size:12px; font-weight:600; }
+  .step.done .step-no { background:#16a34a; color:#fff; }
+  .step.current .step-no { background:var(--blue); color:#fff; }
+  .step-body { display:flex; flex-direction:column; gap:2px; min-width:0; }
+  .step-body .muted { line-height:1.5; }
+  .step-flash { animation:flash 1.2s ease-out; }
+  @keyframes flash { 0% { box-shadow:0 0 0 4px #fde68a; } 100% { box-shadow:none; } }
+  .two-col { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:6px; }
+  @media (max-width:700px) { .two-col { grid-template-columns:1fr; } }
 </style>
 </head>
 <body>
@@ -205,66 +224,119 @@
   <section id="collaboration" class="panel">
     <div class="hint">ChangeUnit 保存字段级差异与完整不可变快照。分支提交不会提前改动主干，审核通过并合并后才更新主干卡片。删除与回滚均产生新提交，不抹除历史。</div>
     <div class="hint">本地单项目演示：作者与审核人是留痕文本，并非登录鉴权。合并主干时会检查「已核验」卡片的摘录确为论文原文子串。</div>
+
+    <div class="card">
+      <h2>协作流程</h2>
+      <ol class="steps" id="wizard-steps"></ol>
+      <div class="row" style="margin-top:10px">
+        <button class="primary" id="wizard-next" onclick="guard(wizardNext)">下一步</button>
+        <button class="small" onclick="guard(refreshWizard)">刷新状态</button>
+        <span id="wizard-hint" class="muted"></span>
+      </div>
+    </div>
+
     <div class="grid">
-      <div class="card">
-        <h2>1. 分支与提交</h2>
+      <div class="card" id="step-branch">
+        <h2>步骤 1 · 选择或新建分支</h2>
         <label class="field" for="g-branch">工作分支</label>
         <select id="g-branch" style="width:100%" onchange="guard(() => loadBranch())"></select>
         <div id="g-branch-info" class="muted" style="margin:8px 0"></div>
         <label class="field" for="g-author">作者</label>
         <input id="g-author" value="协作者" placeholder="提交作者">
-        <div class="row" style="margin-top:12px">
-          <input id="g-card" type="hidden">
-          <select id="g-card-unit" style="flex:1" onchange="fillCardUnit()"></select>
-          <button class="small" onclick="guard(loadBranch)">重新读取</button>
-        </div>
-        <textarea id="g-card-value" placeholder="选择一张卡片，修订其论断"></textarea>
-        <button class="primary" onclick="guard(commitCard)">提交论断修订</button>
         <hr style="border:0;border-top:1px solid var(--line);margin:16px 0">
-        <div class="row"><select id="g-section-unit" style="flex:1" onchange="fillSectionUnit()"></select></div>
-        <input id="g-section-value" placeholder="章节标题">
-        <button class="small" style="margin-top:8px" onclick="guard(commitSection)">提交章节修订</button>
-      </div>
-      <div class="card">
-        <h2>新建分支</h2>
+        <h2 style="font-size:14px">新建分支</h2>
         <div class="row"><input id="g-new-name" placeholder="例如：zhangsan-methods"><select id="g-new-kind"><option value="person">个人</option><option value="topic">主题</option><option value="section">章节</option></select></div>
         <div class="row"><input id="g-new-owner" value="张三" placeholder="负责人"><input id="g-new-purpose" placeholder="用途（必填）"></div>
         <button class="primary" onclick="guard(createBranch)">从主干当前版本创建</button>
-        <h2 style="margin-top:20px">主干提交历史</h2>
-        <div id="g-history" class="scroll"></div>
+      </div>
+
+      <div class="card" id="step-commit">
+        <h2>步骤 2 · 提交修改</h2>
+        <p class="muted">先选要改什么，再填新内容；`unit_key` 由系统生成，可复制到评论里引用。</p>
+        <div class="row">
+          <select id="g-commit-type" onchange="renderCommitPicker()" aria-label="修改对象类型">
+            <option value="card_claim">卡片论断</option>
+            <option value="card_status">卡片核验状态</option>
+            <option value="structure">章节标题</option>
+          </select>
+          <select id="g-commit-object" style="flex:1" onchange="renderCommitPicker()" aria-label="修改对象"></select>
+        </div>
+        <div class="row">
+          <input id="g-commit-unit-key" readonly aria-label="单元标识" title="该单元在版本历史中的稳定标识">
+          <button class="small" onclick="copyUnitKey()">复制标识</button>
+        </div>
+        <div id="g-commit-editor"></div>
+        <div class="row" style="margin-top:8px">
+          <button class="primary" onclick="guard(commitPicked)">提交到当前分支</button>
+          <button class="small" onclick="guard(loadBranch)">重新读取分支</button>
+        </div>
       </div>
     </div>
+
     <div class="grid">
       <div class="card">
-        <h2>2. 发起合并请求</h2>
-        <p class="muted">源分支使用上方选择的工作分支，默认目标为 main。</p>
+        <h2>分支差异（相对基线）</h2>
+        <div class="row">
+          <select id="g-diff-base" aria-label="基线分支"></select>
+          <button class="small" onclick="guard(showBranchDiff)">查看差异</button>
+          <span class="muted" id="g-diff-count"></span>
+        </div>
+        <div id="g-diff" class="scroll"><span class="muted">选择基线分支后查看当前分支改了哪些单元。</span></div>
+        <h2 style="margin-top:16px">主干提交历史</h2>
+        <div id="g-history" class="scroll"></div>
+      </div>
+
+      <div class="card" id="step-mr">
+        <h2>步骤 3 · 发起合并请求</h2>
+        <p class="muted">源分支使用步骤 1 选择的工作分支，默认目标为 main。</p>
         <select id="g-target" style="width:100%;margin-bottom:10px"></select>
         <input id="g-mr-title" placeholder="合并请求标题">
         <button class="primary" style="margin-top:10px" onclick="guard(openMergeRequest)">发起合并请求</button>
         <label class="field" for="g-mr-select">合并请求</label>
         <div class="row"><select id="g-mr-select" style="flex:1" onchange="guard(() => showMergeRequest())"></select><button class="small" onclick="guard(loadMergeRequests)">刷新</button></div>
         <div id="g-mr-summary" class="muted">暂无合并请求。</div>
+        <h2 style="margin-top:16px">合并请求时间线</h2>
+        <div id="g-mr-timeline" class="scroll"><span class="muted">选择合并请求查看。</span></div>
       </div>
-      <div class="card">
-        <h2>3. 评论、审核与合并</h2>
+    </div>
+
+    <div class="grid">
+      <div class="card" id="step-review">
+        <h2>步骤 4 · 审核</h2>
         <label class="field" for="g-reviewer">审核人（不可自我批准）</label>
         <input id="g-reviewer" value="李老师" placeholder="审核人">
-        <input id="g-comment-unit" placeholder="内联评论 unit_key（例如 card_attr:1:claim）">
+        <label class="field" for="g-comment-unit">内联评论锚定的单元</label>
+        <div class="row">
+          <input id="g-comment-unit" placeholder="点击上方变更条目自动填入">
+          <button class="small" onclick="copyUnitKey('#g-comment-unit')">复制</button>
+        </div>
         <textarea id="g-comment-body" placeholder="定位到具体单元的意见（可选）"></textarea>
         <div class="actions">
           <button class="small ok" onclick="guard(() => reviewMergeRequest('approve'))">批准</button>
           <button class="small warn" onclick="guard(() => reviewMergeRequest('request_changes'))">要求修改</button>
           <button class="small" onclick="guard(refreshMergeRequest)">重新检测冲突</button>
         </div>
-        <label class="field" for="g-mr-actor">冲突解决 / 合并操作人</label>
-        <div class="row"><input id="g-mr-actor" value="项目负责人"><button class="primary" onclick="guard(mergeMergeRequest)">合并到目标分支</button></div>
         <div id="g-reviews"></div>
       </div>
+
+      <div class="card" id="step-merge">
+        <h2>步骤 5 · 解决冲突并合并</h2>
+        <label class="field" for="g-mr-actor">冲突解决 / 合并操作人</label>
+        <div class="row"><input id="g-mr-actor" value="项目负责人"><button class="primary" onclick="guard(mergeMergeRequest)">合并到目标分支</button></div>
+        <div id="g-preview"><span class="muted">选择合并请求查看三方预览与冲突。</span></div>
+      </div>
     </div>
-    <div class="card"><h2>三方预览与冲突解决</h2><div id="g-preview"><span class="muted">选择合并请求查看。</span></div></div>
+
     <div class="grid">
-      <div class="card"><h2>4. 版本标签</h2><div class="row"><input id="g-tag-name" placeholder="v1.0"><input id="g-tag-author" value="项目负责人" placeholder="创建人"><button class="primary" onclick="guard(createTag)">标记主干当前版本</button></div><div id="g-tags"></div></div>
+      <div class="card"><h2>版本标签</h2><div class="row"><input id="g-tag-name" placeholder="v1.0"><input id="g-tag-author" value="项目负责人" placeholder="创建人"><button class="primary" onclick="guard(createTag)">标记主干当前版本</button></div><div id="g-tags"></div></div>
       <div class="card"><h2>历史快照</h2><div id="g-tag-detail"><span class="muted">点击版本标签查看该提交的完整单元快照。</span></div></div>
+    </div>
+
+    <div class="card">
+      <h2>核验与挂载留痕</h2>
+      <p class="muted">核验状态改动与章节挂载都会写入追加式审计，可按卡片追溯。这里显示最近 20 条。</p>
+      <div class="row"><button class="small" onclick="guard(loadAuditTrail)">刷新留痕</button><span class="muted" id="g-audit-count"></span></div>
+      <div id="g-audit" class="scroll"><span class="muted">尚未加载。</span></div>
     </div>
   </section>
 </main>
@@ -300,7 +372,10 @@ function notify(message, type = 'info') {
   close.onclick = () => el.remove();
   el.appendChild(close);
   box.appendChild(el);
-  if (type === 'success') setTimeout(() => el.remove(), 2500);
+  // 提示类自动消失，错误保留到用户处理；同时最多保留 5 条，避免堆满屏幕
+  const lifetime = type === 'error' ? 0 : (type === 'success' ? 2500 : 4000);
+  if (lifetime) setTimeout(() => el.remove(), lifetime);
+  while (box.children.length > 5) box.firstChild.remove();
   return el;
 }
 
@@ -635,7 +710,7 @@ function resetCardFilters() {
 
 async function verifyCard(id, action) {
   try {
-    const body = { action };
+    const body = { action, actor: $('#me').value.trim() || '未署名' };
     if (action === 'revise') body.claim = $('#rev-' + id).value;
     await api('/api/cards/' + id + '/verify', { method:'POST', body: JSON.stringify(body) });
     notify(`卡片 #${id} 已${VERIFY_LABELS[action] || '更新'}`, 'success');
@@ -645,7 +720,8 @@ async function verifyCard(id, action) {
 async function assignCard(id) {
   await guard(async () => {
     const sectionId = +$('#asg-' + id).value;
-    await api('/api/cards/' + id + '/assign', { method:'POST', body: JSON.stringify({ section_id: sectionId }) });
+    await api('/api/cards/' + id + '/assign', { method:'POST', body: JSON.stringify({
+      section_id: sectionId, actor: $('#me').value.trim() || '未署名' }) });
     const section = cardState.sections.find(s => s.id === sectionId);
     notify(`卡片 #${id} 已挂到「${section ? section.title : '#' + sectionId}」`, 'success');
     await Promise.all([loadCards(), loadSections()]);
@@ -897,7 +973,7 @@ async function showSectionCards(id) {
 
 
 // ---- 协作与版本（数据库 ChangeUnit，不依赖 Git 命令） ----
-const collab = { branches: [], branchId: null, units: {}, mr: null };
+const collab = { branches: [], branchId: null, units: {}, mr: null, branchCommits: [], nextStep: null };
 async function guard(fn) {
   try { return await fn(); } catch (e) { notify(e.message || String(e), 'error'); console.error(e); }
 }
@@ -928,8 +1004,130 @@ async function loadCollaboration() {
   $('#g-branch').value = collab.branchId;
   $('#g-target').innerHTML = options;
   $('#g-target').value = mainBranch().id;
+  $('#g-diff-base').innerHTML = collab.branches.map(b =>
+    `<option value="${b.id}">${esc(b.name)}</option>`).join('');
+  $('#g-diff-base').value = mainBranch().id;
   await loadBranch(collab.branchId);
-  await Promise.all([loadMergeRequests(), loadTags()]);
+  await Promise.all([loadMergeRequests(), loadTags(), loadAuditTrail()]);
+  renderWizard();
+}
+
+// ---- 五步向导 ----
+function wizardSteps() {
+  const branch = collab.branches.find(b => b.id === collab.branchId) || null;
+  const main = mainBranch();
+  const isMain = branch && main && branch.id === main.id;
+  const commits = collab.branchCommits || [];
+  const mr = collab.mr;
+  const review = mr && mr.review_status ? mr.review_status : null;
+  const approvals = review ? review.approvals : 0;
+  const required = mr ? (mr.required_approvals || 1) : 1;
+  const openConflicts = mr ? (mr.conflicts || []).filter(c => c.active && !c.resolution).length : 0;
+  const stale = !!(mr && mr.preview && mr.preview.stale);
+  const requested = review ? review.request_changes.length : 0;
+  const merged = mr && mr.status === 'merged';
+
+  return [
+    {
+      id: 'step-branch', title: '选择或新建分支',
+      state: branch && !isMain ? 'done' : 'current',
+      detail: !branch ? '尚未选择分支'
+        : isMain ? '当前在 main 上，直接在主干提交会缺少隔离；建议新建个人分支'
+          : `当前分支 ${branch.name}（负责人 ${branch.owner || '未填'}）`,
+      hint: '在步骤 1 选择或新建一个非 main 分支',
+    },
+    {
+      id: 'step-commit', title: '提交修改',
+      state: !branch || isMain ? 'blocked' : (commits.length ? 'done' : 'current'),
+      detail: !branch ? '需要先有分支'
+        : isMain ? '在 main 上无法提交（提交只能落在非 main 分支）'
+          : commits.length ? `本分支已有 ${commits.length} 个提交` : '本分支还没有提交',
+      hint: '在步骤 2 选择对象并填写新内容后提交',
+    },
+    {
+      id: 'step-mr', title: '发起合并请求',
+      state: mr ? 'done' : (commits.length && !isMain ? 'current' : 'blocked'),
+      detail: mr ? `MR !${mr.id}：${branchName(mr.source_branch_id)} → ${branchName(mr.target_branch_id)}`
+        : '还没有合并请求',
+      hint: '在步骤 3 填写标题并发起合并请求',
+    },
+    {
+      id: 'step-review', title: '审核',
+      state: !mr ? 'blocked' : (merged ? 'done'
+        : requested ? 'blocked'
+          : approvals >= required ? 'done' : 'current'),
+      detail: !mr ? '需要先有合并请求'
+        : requested ? `有 ${requested} 位审核人要求修改`
+          : `已获 ${approvals} / ${required} 位非作者批准`,
+      hint: '在步骤 4 由非作者审核人批准（也可要求修改）',
+    },
+    {
+      id: 'step-merge', title: '解决冲突并合并',
+      state: !mr ? 'blocked' : (merged ? 'done'
+        : (stale || openConflicts || approvals < required || requested) ? 'blocked' : 'current'),
+      detail: !mr ? '需要先有合并请求'
+        : merged ? '已合并到目标分支'
+          : stale ? '预览已过期，请先在步骤 4 重新检测冲突'
+            : openConflicts ? `有 ${openConflicts} 个冲突待解决`
+              : approvals < required ? `还需 ${required - approvals} 位非作者批准`
+                : requested ? '存在「要求修改」的审核结论'
+                  : '所有条件就绪，可以合并',
+      hint: '在步骤 5 解决冲突后合并，再打标签',
+    },
+  ];
+}
+function renderWizard() {
+  const steps = wizardSteps();
+  $('#wizard-steps').innerHTML = steps.map((step, index) => `
+    <li class="step ${step.state}">
+      <button class="step-jump" onclick="focusStep('${step.id}')">
+        <span class="step-no">${index + 1}</span>
+        <span class="step-body">
+          <b>${esc(step.title)}</b>
+          <span class="muted">${esc(step.detail)}</span>
+        </span>
+      </button>
+    </li>`).join('');
+  const next = steps.find(step => step.state !== 'done');
+  collab.nextStep = next || null;
+  $('#wizard-next').textContent = next ? `下一步：${next.title}` : '流程已完成';
+  $('#wizard-next').disabled = !next;
+  $('#wizard-hint').textContent = next ? next.hint : '五步都已完成。可在下方打标签固定版本。';
+}
+function focusStep(id) {
+  const target = $('#' + id);
+  if (!target) return;
+  target.scrollIntoView({ block: 'start', behavior: 'smooth' });
+  target.classList.add('step-flash');
+  setTimeout(() => target.classList.remove('step-flash'), 1200);
+}
+function wizardNext() {
+  const next = collab.nextStep;
+  if (!next) { notify('协作流程五步都已完成', 'success'); return; }
+  focusStep(next.id);
+  notify(`下一步：${next.title} —— ${next.hint}`, 'info');
+}
+async function refreshWizard() {
+  await loadCollaboration();
+  notify('已刷新协作状态', 'success');
+}
+
+// ---- 核验与挂载留痕 ----
+async function loadAuditTrail() {
+  const logs = await api('/api/audit-logs?limit=20');
+  const cardLogs = logs.filter(item => item.entity_type === 'card');
+  $('#g-audit-count').textContent = cardLogs.length ? `最近 ${cardLogs.length} 条卡片操作` : '';
+  $('#g-audit').innerHTML = cardLogs.length ? cardLogs.map(item => {
+    const details = item.details || {};
+    const action = item.action === 'card.assign' ? '挂到章节'
+      : item.action.startsWith('card.verify.') ? `核验：${VERIFY_LABELS[item.action.split('.').pop()] || item.action}` : item.action;
+    const extra = item.action === 'card.assign'
+      ? `→ 章节 #${details.section_id}`
+      : `${statusLabel(details.from_status)} → ${statusLabel(details.to_status)}${details.claim_changed ? '（论断已改）' : ''}`;
+    return `<div class="commit"><b>卡片 #${item.entity_id}</b> ${esc(action)}
+      <span class="muted">${esc(item.actor)} · ${shortTime(item.created_at)}</span>
+      <div class="muted">${esc(extra)}</div></div>`;
+  }).join('') : '<span class="muted">暂无卡片核验或挂载记录。</span>';
 }
 
 async function createBranch() {
@@ -942,29 +1140,131 @@ async function createBranch() {
   await loadCollaboration();
 }
 
-function fillCardUnit() {
-  const key = $('#g-card-unit').value;
+// ---- 提交面板：三级人类可读选择器（替代裸 unit_key 下拉） ----
+const UNIT_KIND_LABELS = {
+  card_attr: '卡片字段', card_field: '卡片自定义字段', structure: '章节',
+  block: '段落', sentence: '句子', citation: '引用绑定', metadata: '元数据',
+};
+function unitLabel(key, content) {
+  const parts = String(key).split(':');
+  const id = parts[1];
+  if (key.endsWith(':claim')) return `卡片 #${id} · 论断`;
+  if (key.endsWith(':status')) return `卡片 #${id} · 核验状态`;
+  if (key.startsWith('card_field:')) return `卡片 #${id} · 字段「${parts.slice(2).join(':')}」`;
+  if (key.startsWith('structure:')) {
+    const title = content && typeof content === 'object' ? content.title : '';
+    return `章节 #${id}${title ? '「' + title + '」' : ''}`;
+  }
+  if (key.startsWith('metadata:')) return `元数据 ${parts.slice(1).join(':')}`;
+  return `${UNIT_KIND_LABELS[parts[0]] || parts[0]} #${id || parts.slice(1).join(':')}`;
+}
+function commitKindOf(key) {
+  if (/^card_attr:\d+:claim$/.test(key)) return 'card_claim';
+  if (/^card_attr:\d+:status$/.test(key)) return 'card_status';
+  if (key.startsWith('structure:')) return 'structure';
+  return null;
+}
+function renderCommitPicker() {
+  const kind = $('#g-commit-type').value;
+  const entries = Object.entries(collab.units).filter(([key]) => commitKindOf(key) === kind);
+  const objectSelect = $('#g-commit-object');
+  objectSelect.innerHTML = entries.length
+    ? entries.map(([key, unit]) => `<option value="${esc(key)}">${esc(unitLabel(key, unit.content))}</option>`).join('')
+    : '<option value="">（当前分支还没有这类单元）</option>';
+  const key = objectSelect.value;
   const unit = collab.units[key];
-  $('#g-card-value').value = unit ? (typeof unit.content === 'string' ? unit.content : JSON.stringify(unit.content)) : '';
-  $('#g-comment-unit').value = key || '';
+  $('#g-commit-unit-key').value = key || '';
+  const editor = $('#g-commit-editor');
+  if (!unit) { editor.innerHTML = '<p class="muted">当前分支没有可改的单元；切换分支或先完成内容准备。</p>'; return; }
+  if (kind === 'card_status') {
+    const options = ['pending', 'verified', 'rejected'];
+    editor.innerHTML = `<label class="field">新的核验状态</label>
+      <select id="g-commit-value" style="width:100%">
+        ${options.map(s => `<option value="${s}" ${unit.content === s ? 'selected' : ''}>${statusLabel(s)}</option>`).join('')}
+      </select>
+      <p class="muted">当前：${statusLabel(unit.content)}</p>`;
+  } else if (kind === 'structure') {
+    editor.innerHTML = `<label class="field">新的章节标题</label>
+      <input id="g-commit-value" value="${esc(unit.content && unit.content.title || '')}">`;
+  } else {
+    editor.innerHTML = `<label class="field">新的论断</label>
+      <textarea id="g-commit-value">${esc(unit.content || '')}</textarea>
+      <div class="diff-preview" id="g-commit-diff"></div>`;
+    const input = $('#g-commit-value');
+    input.addEventListener('input', () => {
+      const box = $('#g-commit-diff');
+      if (input.value === unit.content) { box.innerHTML = ''; return; }
+      box.innerHTML = '差异：' + diffParts(String(unit.content || ''), input.value).map(part =>
+        part.type === 'same' ? esc(part.text)
+          : part.type === 'del' ? `<del class="diff-del">${esc(part.text)}</del>`
+            : `<ins class="diff-add">${esc(part.text)}</ins>`).join('');
+    });
+  }
 }
-function fillSectionUnit() {
-  const unit = collab.units[$('#g-section-unit').value];
-  $('#g-section-value').value = unit && unit.content ? unit.content.title || '' : '';
+function copyUnitKey(selector) {
+  const target = typeof selector === 'string' ? $(selector) : $('#g-commit-unit-key');
+  const value = (target && target.value || '').trim();
+  if (!value) { notify('当前没有可复制的单元标识', 'info'); return; }
+  if (navigator.clipboard) navigator.clipboard.writeText(value);
+  notify(`已复制：${value}`, 'success');
 }
-function renderBranchEditors() {
-  const cards = Object.entries(collab.units).filter(([key]) => /^card_attr:\d+:claim$/.test(key));
-  $('#g-card-unit').innerHTML = cards.map(([key, unit]) => {
-    const id = key.split(':')[1];
-    const status = (collab.units['card_attr:' + id + ':status'] || {}).content || '';
-    return `<option value="${esc(key)}">卡片 #${id} [${esc(status)}] · ${esc(String(unit.content).slice(0,42))}</option>`;
-  }).join('');
-  if (!cards.length) $('#g-card-unit').innerHTML = '<option value="">暂无论断单元</option>';
-  const sections = Object.entries(collab.units).filter(([key]) => key.startsWith('structure:'));
-  $('#g-section-unit').innerHTML = sections.map(([key, unit]) =>
-    `<option value="${esc(key)}">#${esc(key.split(':')[1])} ${esc(unit.content.title)}</option>`).join('');
-  if (!sections.length) $('#g-section-unit').innerHTML = '<option value="">暂无章节单元</option>';
-  fillCardUnit(); fillSectionUnit();
+async function commitPicked() {
+  const kind = $('#g-commit-type').value;
+  const key = $('#g-commit-object').value;
+  if (!key) throw new Error('请选择要修改的对象');
+  const unit = collab.units[key];
+  const raw = $('#g-commit-value');
+  const value = raw ? raw.value.trim() : '';
+  if (kind === 'structure') {
+    if (!value) throw new Error('章节标题不能为空');
+    const content = Object.assign({}, unit.content, { title: value });
+    await commitChanges(`修订${unitLabel(key, unit.content)}`, [{
+      unit_type: 'structure', unit_key: key, old_hash: unit.hash,
+      old_content: unit.content, new_content: content,
+    }]);
+    return;
+  }
+  if (!value) throw new Error('内容不能为空；删除必须通过显式变更记录');
+  await commitChanges(`修订${unitLabel(key, unit.content)}`, [{
+    unit_type: 'card_attr', unit_key: key, old_hash: unit.hash,
+    old_content: unit.content, new_content: value,
+  }]);
+}
+
+// ---- 分支差异视图 ----
+async function showBranchDiff() {
+  const branch = collab.branches.find(b => b.id === collab.branchId);
+  if (!branch) throw new Error('请先选择工作分支');
+  const base = $('#g-diff-base').value || 'main';
+  const diff = await api(`/api/branches/${branch.id}/diff?base=${encodeURIComponent(base)}`);
+  const counts = diff.counts;
+  $('#g-diff-count').textContent = counts.total
+    ? `共 ${counts.total} 处：新增 ${counts.added} · 修改 ${counts.changed} · 删除 ${counts.removed}`
+    : '与基线一致，没有差异';
+  $('#g-diff').innerHTML = counts.total ? diff.changes.map(change => `
+    <div class="commit">
+      <b>${esc(unitLabel(change.unit_key, change.head_content || change.base_content))}</b>
+      <span class="badge ${change.status === 'added' ? 'approved' : change.status === 'removed' ? 'needs_changes' : 'open'}">${change.status === 'added' ? '新增' : change.status === 'removed' ? '删除' : '修改'}</span>
+      <div class="muted"><code>${esc(change.unit_key)}</code></div>
+      ${renderValueChange(change.base_content, change.head_content)}
+    </div>`).join('') : '<span class="muted">该分支与基线没有任何单元差异。</span>';
+}
+function renderValueChange(baseContent, headContent) {
+  const asText = (value) => value === null || value === undefined ? ''
+    : (typeof value === 'string' ? value : JSON.stringify(value));
+  const before = asText(baseContent);
+  const after = asText(headContent);
+  if (!before) return `<div>新增内容：<ins class="diff-add">${esc(after)}</ins></div>`;
+  if (!after) return `<div>删除内容：<del class="diff-del">${esc(before)}</del></div>`;
+  if (before === after) return '<div class="muted">内容相同</div>';
+  const parts = diffParts(before, after).map(part =>
+    part.type === 'same' ? esc(part.text)
+      : part.type === 'del' ? `<del class="diff-del">${esc(part.text)}</del>`
+        : `<ins class="diff-add">${esc(part.text)}</ins>`).join('');
+  return `<div class="two-col">
+    <div><b class="muted">修改前</b><pre class="code">${esc(before)}</pre></div>
+    <div><b class="muted">修改后</b><pre class="code">${esc(after)}</pre></div>
+  </div><div class="diff-preview">差异：${parts}</div>`;
 }
 
 async function loadBranch(id) {
@@ -973,8 +1273,15 @@ async function loadBranch(id) {
   $('#g-branch').value = branch.id;
   collab.units = branch.units || {};
   $('#g-branch-info').textContent = branch.name + ' · 起点 #' + branch.base_commit_id + ' · 当前 #' + branch.head_commit_id + ' · ' + (branch.purpose || '');
-  renderBranchEditors();
-  await loadHistory();
+  renderCommitPicker();
+  await Promise.all([loadHistory(), loadBranchCommits()]);
+  renderWizard();
+}
+
+async function loadBranchCommits() {
+  const branch = collab.branches.find(b => b.id === collab.branchId);
+  if (!branch) { collab.branchCommits = []; return; }
+  collab.branchCommits = await api('/api/branches/' + branch.id + '/commits');
 }
 
 async function commitChanges(message, changes) {
@@ -983,25 +1290,6 @@ async function commitChanges(message, changes) {
   await api('/api/branches/' + selectedBranchId() + '/commits', { method:'POST', body: JSON.stringify({author, message, changes}) });
   notify('提交成功：工作分支已前进，主干不受影响', 'success');
   await loadCollaboration();
-}
-async function commitCard() {
-  const key = $('#g-card-unit').value;
-  if (!key) throw new Error('请选择要修订的论断单元');
-  const unit = collab.units[key];
-  const value = $('#g-card-value').value.trim();
-  if (!value) throw new Error('论断不能为空；删除必须通过显式变更记录');
-  await commitChanges('修订卡片 #' + key.split(':')[1] + ' 的论断', [{
-    unit_type:'card_attr', unit_key:key, old_hash:unit.hash, old_content:unit.content, new_content:value
-  }]);
-}
-async function commitSection() {
-  const key = $('#g-section-unit').value;
-  if (!key) throw new Error('请选择章节');
-  const content = Object.assign({}, collab.units[key].content, {title: $('#g-section-value').value.trim()});
-  await commitChanges('修订章节 ' + key.split(':')[1] + ' 的标题', [{
-    unit_type:'structure', unit_key:key, old_hash:collab.units[key].hash,
-    old_content:collab.units[key].content, new_content:content
-  }]);
 }
 
 async function loadHistory() {
@@ -1054,36 +1342,112 @@ async function showMergeRequest(id) {
   collab.mr = m;
   $('#g-mr-select').value = m.id;
   const p = m.preview || {};
+  const review = m.review_status || { approvals: 0, required_approvals: m.required_approvals || 1, approvers: [], request_changes: [] };
+  const need = Math.max(0, (review.required_approvals || 1) - review.approvals);
   $('#g-mr-summary').innerHTML = `<p><span class="badge ${esc(m.status)}">${esc(m.status)}</span>
     ${esc(branchName(m.source_branch_id))} → ${esc(branchName(m.target_branch_id))} · 需要 ${m.required_approvals} 人批准
-    ${p.stale ? '<span class="badge conflict">请求中的预览已过期，请重新检测</span>' : ''}</p>`;
+    ${need ? `<span class="badge conflict">还需 ${need} 位非作者批准</span>` : '<span class="badge approved">批准数已足够</span>'}
+    ${review.request_changes.length ? `<span class="badge needs_changes">${esc(review.request_changes.join('、'))} 要求修改</span>` : ''}
+    ${p.stale ? '<span class="badge conflict">预览已过期，请重新检测冲突</span>' : ''}</p>`;
   const reviews = m.reviews || [];
   $('#g-reviews').innerHTML = reviews.length ? reviews.map(r => `<div class="commit">
     <b>${esc(r.reviewer)}：${r.verdict === 'approve' ? '批准' : '要求修改'}</b>
     <span class="muted">源提交 #${r.source_commit_id} · ${shortTime(r.created_at)}</span>
-    ${(r.comments || []).map(c => `<div><code>${esc(c.unit_key)}</code> ${esc(c.body)}</div>`).join('')}
+    ${(r.comments || []).map(c => `<div><b>${esc(unitLabel(c.unit_key, null))}</b> <code>${esc(c.unit_key)}</code> ${esc(c.body)}</div>`).join('')}
   </div>`).join('') : '<p class="muted">暂未审核。</p>';
+
+  renderMrTimeline(m, review);
   const cs = m.conflicts || [];
-  const changeMarkup = (p.changes || []).length ? `<details open><summary>本次来源分支变更（点击单元可写内联评论）</summary>
-    ${p.changes.map((c, i) => `<div class="commit"><button class="small" onclick="selectChangedUnit(${i})"><code>${esc(c.unit_key)}</code></button>
-      <div class="three"><div><b>base</b><pre class="code">${esc(fmt(c.base_content))}</pre></div>
-      <div><b>目标 ours</b><pre class="code">${esc(fmt(c.ours_content))}</pre></div>
-      <div><b>来源 theirs</b><pre class="code">${esc(fmt(c.theirs_content))}</pre></div></div></div>`).join('')}</details>` : '';
-  $('#g-preview').innerHTML = `<div class="hint">base：#<b>${p.base_commit_id ?? '待检测'}</b>；目标 ours：#<b>${p.ours_commit_id ?? '—'}</b>；来源 theirs：#<b>${p.theirs_commit_id ?? '—'}</b>。只有双方均修改同一单元且结果不同才冲突。</div>` +
-    changeMarkup + (cs.length ? cs.map(c => `<div class="card">
-      <b><code>${esc(c.unit_key)}</code></b> <span class="badge ${c.resolution ? 'verified' : 'conflict'}">${c.resolution ? '已解决：' + esc(c.resolution) : '待解决冲突'}</span>
-      <div class="three">
-        <div><b>共同祖先 base</b><pre class="code">${esc(fmt(c.base_content))}</pre></div>
-        <div><b>目标 ours</b><pre class="code">${esc(fmt(c.ours_content))}</pre></div>
-        <div><b>来源 theirs</b><pre class="code">${esc(fmt(c.theirs_content))}</pre></div>
+  const changeMarkup = (p.changes || []).length ? `<details open><summary>本次来源分支变更（${p.changes.length} 处，点击可写内联评论）</summary>
+    ${p.changes.map((c, i) => `<div class="commit">
+      <div class="row" style="margin-bottom:4px">
+        <b>${esc(unitLabel(c.unit_key, c.theirs_content))}</b>
+        <button class="small" onclick="selectChangedUnit(${i})">评论这个单元</button>
+        <code class="muted">${esc(c.unit_key)}</code>
       </div>
-      ${c.resolution ? '<div class="muted">解决人：' + esc(c.resolved_by) + ' · 结果：' + esc(fmt(c.resolved_content)) + '</div>' : `
-        <label class="field">手工合并内容（对象请输入 JSON，普通文本可直接输入）</label>
-        <textarea id="g-resolution-${c.id}">${esc(fmt(c.theirs_content))}</textarea>
-        <div class="actions"><button class="small" onclick="guard(() => resolveConflict(${c.id},'keep_base'))">保留目标</button>
-        <button class="small" onclick="guard(() => resolveConflict(${c.id},'keep_branch'))">保留来源</button>
-        <button class="small warn" onclick="guard(() => resolveConflict(${c.id},'manual'))">采用手工内容</button></div>`}
-    </div>`).join('') : '<p class="muted">当前检测未发现冲突。</p>');
+      ${renderValueChange(c.ours_content, c.theirs_content)}
+    </div>`).join('')}</details>` : '<p class="muted">来源分支没有相对目标分支的改动。</p>';
+  const conflictMarkup = cs.length
+    ? cs.map(c => conflictCard(c)).join('')
+    : '<p class="muted">当前检测未发现冲突。</p>';
+  $('#g-preview').innerHTML = `<div class="hint">共同祖先 base：#<b>${p.base_commit_id ?? '待检测'}</b>；目标 ours：#<b>${p.ours_commit_id ?? '—'}</b>；来源 theirs：#<b>${p.theirs_commit_id ?? '—'}</b>。只有双方都改了同一单元且结果不同才算冲突。</div>`
+    + changeMarkup + conflictMarkup;
+  renderWizard();
+}
+function conflictCard(c) {
+  const baseText = fmt(c.base_content);
+  const note = c.base_content === null || c.base_content === undefined
+    ? '共同祖先里没有这个单元 —— 说明它是新增内容，不是改写。'
+    : '共同祖先有内容，双方各自改了它，结果不同。';
+  const body = c.resolution
+    ? `<div class="muted">解决人：${esc(c.resolved_by)} · 结果：${esc(fmt(c.resolved_content))}</div>`
+    : `<div class="muted">三种处理方式的结果预览：</div>
+       <table>
+         <tr><th>选项</th><th>合并后该单元的值</th></tr>
+         <tr><td>保留目标</td><td><pre class="code">${esc(fmt(c.ours_content))}</pre></td></tr>
+         <tr><td>保留来源</td><td><pre class="code">${esc(fmt(c.theirs_content))}</pre></td></tr>
+         <tr><td>手工内容</td><td><pre class="code" id="g-manual-preview-${c.id}">${esc(fmt(c.theirs_content))}</pre></td></tr>
+       </table>
+       <label class="field">手工合并内容（文本直接输入；对象请写 JSON）</label>
+       <textarea id="g-resolution-${c.id}" oninput="updateManualPreview(${c.id})">${esc(fmt(c.theirs_content))}</textarea>
+       <div class="muted" id="g-manual-hint-${c.id}"></div>
+       <div class="actions">
+         <button class="small" onclick="guard(() => resolveConflict(${c.id},'keep_base'))">保留目标</button>
+         <button class="small" onclick="guard(() => resolveConflict(${c.id},'keep_branch'))">保留来源</button>
+         <button class="small warn" onclick="guard(() => resolveConflict(${c.id},'manual'))">采用手工内容</button>
+       </div>`;
+  return `<div class="card">
+    <b>${esc(unitLabel(c.unit_key, c.theirs_content || c.ours_content))}</b>
+    <span class="badge ${c.resolution ? 'verified' : 'conflict'}">${c.resolution ? '已解决：' + esc(c.resolution) : '待解决冲突'}</span>
+    <div class="muted"><code>${esc(c.unit_key)}</code> · ${esc(note)}</div>
+    <div class="three">
+      <div><b>共同祖先 base</b><pre class="code">${esc(baseText)}</pre></div>
+      <div><b>目标 ours</b><pre class="code">${esc(fmt(c.ours_content))}</pre></div>
+      <div><b>来源 theirs</b><pre class="code">${esc(fmt(c.theirs_content))}</pre></div>
+    </div>
+    ${body}
+  </div>`;
+}
+function renderMrTimeline(m, review) {
+  const events = [];
+  events.push({ at: m.created_at, text: `创建合并请求：${m.title}`, who: m.author });
+  (collab.branchCommits || []).forEach(c => events.push({
+    at: c.created_at, text: `源分支提交 #${c.id}：${c.message}`, who: c.author,
+  }));
+  (m.reviews || []).forEach(r => {
+    events.push({
+      at: r.created_at, who: r.reviewer,
+      text: `${r.verdict === 'approve' ? '批准' : '要求修改'}（源提交 #${r.source_commit_id}）`
+        + ((r.comments || []).length ? `，并留了 ${r.comments.length} 条内联评论` : ''),
+    });
+  });
+  (m.conflicts || []).forEach(c => {
+    if (c.resolved_at) {
+      events.push({ at: c.resolved_at, who: c.resolved_by,
+        text: `解决冲突 ${unitLabel(c.unit_key, c.resolved_content)}（${c.resolution}）` });
+    }
+  });
+  if (m.merged_at) events.push({ at: m.merged_at, who: m.merged_by || '—', text: '合并完成' });
+  events.sort((a, b) => String(a.at || '').localeCompare(String(b.at || '')));
+  const need = Math.max(0, (review.required_approvals || 1) - review.approvals);
+  $('#g-mr-timeline').innerHTML = `<p class="muted">${need ? `还需 ${need} 位非作者批准` : '批准数已满足'} ·
+    ${(m.conflicts || []).filter(c => c.active && !c.resolution).length} 个待解决冲突</p>` +
+    events.map(e => `<div class="commit"><b>${esc(e.text)}</b>
+      <span class="muted">${esc(e.who || '—')} · ${shortTime(e.at)}</span></div>`).join('');
+}
+function updateManualPreview(id) {
+  const raw = $('#g-resolution-' + id).value;
+  const preview = $('#g-manual-preview-' + id);
+  const hint = $('#g-manual-hint-' + id);
+  if (!preview) return;
+  try {
+    const parsed = JSON.parse(raw);
+    preview.textContent = JSON.stringify(parsed, null, 2);
+    if (hint) hint.textContent = '已识别为 JSON 对象，将按结构化值保存。';
+  } catch (_) {
+    preview.textContent = raw;
+    if (hint) hint.textContent = raw.trim() ? '按普通文本保存。' : '空内容表示删除该单元。';
+  }
 }
 function selectChangedUnit(index) {
   const m = requireMergeRequest();

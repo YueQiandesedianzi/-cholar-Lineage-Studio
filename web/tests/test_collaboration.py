@@ -1246,6 +1246,102 @@ class CollaborationApiTest(unittest.TestCase):
         )
         self.assertEqual(status_of(), "pending")
 
+    def test_verify_audit_trail_and_branch_diff_endpoint(self):
+        """核验改动写入审计；分支差异端点按 added/changed/removed 分类。"""
+        excerpt = "Branch diff must report exactly one changed unit."
+        template_id = self.entity_id(
+            self.api_json(
+                "POST",
+                "/api/templates",
+                expected=201,
+                json={"name": "差异模板", "fields": ["结论"]},
+            ),
+            "template",
+        )
+        self.api_json("POST", "/api/templates/%d/activate" % template_id)
+        paper_id = self.entity_id(
+            self.api_json(
+                "POST",
+                "/api/papers",
+                expected=201,
+                json={"title": "diff paper", "abstract": excerpt},
+            ),
+            "paper",
+        )
+        self.api_json(
+            "POST", "/api/extract", json={"paper_id": paper_id, "template_id": template_id}
+        )
+        card_id = self.api_json("GET", "/api/cards?paper_id=%d" % paper_id)[0]["id"]
+
+        verified = self.api_json(
+            "POST", "/api/cards/%d/verify" % card_id,
+            json={"action": "approve", "actor": "张三"},
+        )
+        self.assertEqual(verified["status"], "verified")
+        logs = self.api_json(
+            "GET", "/api/audit-logs?entity_type=card&entity_id=%d" % card_id
+        )
+        self.assertTrue(logs)
+        self.assertEqual(logs[0]["actor"], "张三")
+        self.assertEqual(logs[0]["action"], "card.verify.approve")
+        self.assertEqual(logs[0]["details"]["from_status"], "pending")
+        self.assertEqual(logs[0]["details"]["to_status"], "verified")
+
+        # 引导 main 根提交（含刚才这张卡片），再在分支上改一次论断
+        self.main()
+        card = self.live_card(card_id)
+        branch = self.api_json(
+            "POST", "/api/branches", expected=201,
+            json={"name": "diff-branch", "kind": "person", "owner": "张三",
+                  "purpose": "验证分支差异视图"},
+        )
+        branch_id = branch["id"]
+        self.commit(branch_id, "修订论断", [self.claim_change(card, "分支上的新论断")])
+
+        diff = self.api_json("GET", "/api/branches/%d/diff?base=main" % branch_id)
+        self.assertEqual(diff["base_branch_name"], "main")
+        self.assertEqual(diff["counts"]["changed"], 1)
+        self.assertEqual(diff["counts"]["added"], 0)
+        self.assertEqual(diff["changes"][0]["unit_key"], self.claim_key(card))
+        self.assertEqual(diff["changes"][0]["status"], "changed")
+        self.assertEqual(diff["changes"][0]["base_content"], card["claim"])
+        self.assertEqual(diff["changes"][0]["head_content"], "分支上的新论断")
+
+        # 与自身比较时没有差异
+        same = self.api_json("GET", "/api/branches/%d/diff?base=%d" % (branch_id, branch_id))
+        self.assertEqual(same["counts"]["total"], 0)
+        self.assertEqual(same["base_commit_id"], same["head_commit_id"])
+
+    def test_card_assignment_is_audited(self):
+        excerpt = "Assigning a card to a section must leave an audit entry."
+        template_id = self.entity_id(
+            self.api_json("POST", "/api/templates", expected=201,
+                          json={"name": "挂载模板", "fields": ["结论"]}),
+            "template",
+        )
+        self.api_json("POST", "/api/templates/%d/activate" % template_id)
+        paper_id = self.entity_id(
+            self.api_json("POST", "/api/papers", expected=201,
+                          json={"title": "assign paper", "abstract": excerpt}),
+            "paper",
+        )
+        self.api_json("POST", "/api/extract",
+                      json={"paper_id": paper_id, "template_id": template_id})
+        card_id = self.api_json("GET", "/api/cards?paper_id=%d" % paper_id)[0]["id"]
+        self.api_json("POST", "/api/cards/%d/verify" % card_id, json={"action": "approve"})
+        section_id = self.entity_id(
+            self.api_json("POST", "/api/sections", expected=201,
+                          json={"title": "审计章节"}),
+            "section",
+        )
+        self.api_json("POST", "/api/cards/%d/assign" % card_id,
+                      json={"section_id": section_id, "actor": "李四"})
+        logs = self.api_json("GET", "/api/audit-logs?entity_type=card&entity_id=%d" % card_id)
+        assign_entries = [item for item in logs if item["action"] == "card.assign"]
+        self.assertEqual(len(assign_entries), 1)
+        self.assertEqual(assign_entries[0]["actor"], "李四")
+        self.assertEqual(assign_entries[0]["details"]["section_id"], section_id)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

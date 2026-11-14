@@ -126,7 +126,7 @@ for p in papers:
 cards = c.get("/api/cards").get_json()
 for card in cards:
     action = "reject" if card["id"] % 10 == 0 else "approve"
-    c.post(f"/api/cards/{card['id']}/verify", json={"action": action})
+    c.post(f"/api/cards/{card['id']}/verify", json={"action": action, "actor": "演示语料"})
 
 verified = c.get("/api/cards?status=verified").get_json()
 
@@ -141,7 +141,8 @@ for s in SECTIONS:
 
 # 6. 把部分已核验卡片挂到章节
 for i, card in enumerate(verified[:16]):
-    c.post(f"/api/cards/{card['id']}/assign", json={"section_id": sec_ids[i % len(sec_ids)]})
+    c.post(f"/api/cards/{card['id']}/assign",
+           json={"section_id": sec_ids[i % len(sec_ids)], "actor": "演示语料"})
 
 print(f"papers={len(papers)}  cards={total}  verified={len(verified)}  rejected={len(cards)-len(verified)}  sections={len(sec_ids)}")
 print("DB:", db)

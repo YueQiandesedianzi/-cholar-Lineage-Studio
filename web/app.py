@@ -11,7 +11,7 @@ import sqlite3
 
 from flask import Flask, g, jsonify, request, render_template
 
-from collaboration import COLLABORATION_SCHEMA, register_collaboration
+from collaboration import COLLABORATION_SCHEMA, record_audit, register_collaboration
 
 DB_PATH = os.environ.get(
     "REVIEWGIT_DB",
@@ -277,6 +277,9 @@ def verify_card(cid):
             return jsonify({"error": "摘录未通过原文校验，不能核验通过"}), 400
         if not card["excerpt"] or card["excerpt"] not in card["source_text"]:
             return jsonify({"error": "摘录不是来源文本的逐字子串，不能核验通过"}), 400
+    previous_status = card["status"]
+    previous_claim = card["claim"]
+    actor = (d.get("actor") or "").strip() or "未署名"
     if action == "approve":
         db.execute("UPDATE cards SET status = 'verified' WHERE id = ?", (cid,))
     elif action == "reject":
@@ -289,8 +292,14 @@ def verify_card(cid):
     elif action == "reset":
         # 撤回核验结论，回到待核验；摘录校验只约束"通过"，不约束撤回。
         db.execute("UPDATE cards SET status = 'pending' WHERE id = ?", (cid,))
+    new_status = db.execute("SELECT status, claim FROM cards WHERE id = ?", (cid,)).fetchone()
+    record_audit(db, actor, "card.verify." + action, "card", cid, {
+        "from_status": previous_status, "to_status": new_status["status"],
+        "claim_changed": new_status["claim"] != previous_claim,
+        "previous_claim": previous_claim, "claim": new_status["claim"],
+    })
     db.commit()
-    return jsonify({"ok": True})
+    return jsonify({"ok": True, "status": new_status["status"]})
 
 
 # ---------- 综述框架 ----------
@@ -354,6 +363,8 @@ def assign_card(cid):
     db = get_db()
     db.execute("INSERT OR REPLACE INTO card_sections (card_id, section_id) VALUES (?, ?)",
                (cid, section_id))
+    actor = (d.get("actor") or "").strip() or "未署名"
+    record_audit(db, actor, "card.assign", "card", cid, {"section_id": section_id})
     db.commit()
     return jsonify({"ok": True})
 

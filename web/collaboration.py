@@ -390,6 +390,11 @@ def _audit(db, actor, action, entity_type, entity_id, details=None):
     )
 
 
+def record_audit(db, actor, action, entity_type, entity_id, details=None):
+    """供宿主应用（app.py）在非协作接口里留下同样格式的审计记录。"""
+    _audit(db, actor, action, entity_type, entity_id, details)
+
+
 @contextmanager
 def _write(db, immediate=False):
     """Use a savepoint when the host request already opened a transaction."""
@@ -1470,19 +1475,81 @@ def register_collaboration(app, get_db):
         return jsonify(_tag_dict(row, include_snapshot=True))
 
     def audit_logs(db):
-        rows = db.execute("SELECT * FROM audit_logs ORDER BY id DESC").fetchall()
+        entity_type = request.args.get("entity_type")
+        entity_id = request.args.get("entity_id")
+        try:
+            limit = min(int(request.args.get("limit", 100)), 500)
+        except (TypeError, ValueError):
+            limit = 100
+        query = "SELECT * FROM audit_logs"
+        conds, args = [], []
+        if entity_type:
+            conds.append("entity_type = ?"); args.append(entity_type)
+        if entity_id:
+            conds.append("entity_id = ?"); args.append(entity_id)
+        if conds:
+            query += " WHERE " + " AND ".join(conds)
+        query += " ORDER BY id DESC LIMIT ?"
+        args.append(limit)
         result = []
-        for row in rows:
+        for row in db.execute(query, args).fetchall():
             item = dict(row)
             item["details"] = _loads(item["details_json"], {})
             result.append(item)
         return jsonify(result)
+
+    def branch_diff(db, branch_id):
+        """当前分支相对基线分支的单元级差异，用于提交前自查。"""
+        branch = _branch(db, branch_id)
+        base_ref = request.args.get("base")
+        if base_ref:
+            if str(base_ref).isdigit():
+                base_branch = _branch(db, int(base_ref))
+            else:
+                base_branch = db.execute(
+                    "SELECT * FROM branches WHERE name = ?", (base_ref,)
+                ).fetchone()
+                if base_branch is None:
+                    raise ApiError(404, "基线分支不存在")
+        else:
+            base_branch = _ensure_main(db)
+        base_snapshot = _snapshot(_commit(db, base_branch["head_commit_id"]))
+        head_snapshot = _snapshot(_commit(db, branch["head_commit_id"]))
+        changes = []
+        for item in _diff(base_snapshot, head_snapshot):
+            old, new = item["old_unit"], item["new_unit"]
+            if old is MISSING:
+                status = "added"
+            elif new is MISSING:
+                status = "removed"
+            else:
+                status = "changed"
+            changes.append({
+                "unit_key": item["unit_key"], "unit_type": item["unit_type"], "status": status,
+                "base_content": None if old is MISSING else old["content"],
+                "head_content": None if new is MISSING else new["content"],
+            })
+        counts = {
+            "added": sum(1 for c in changes if c["status"] == "added"),
+            "removed": sum(1 for c in changes if c["status"] == "removed"),
+            "changed": sum(1 for c in changes if c["status"] == "changed"),
+        }
+        counts["total"] = len(changes)
+        return jsonify({
+            "branch_id": branch["id"], "branch_name": branch["name"],
+            "base_branch_id": base_branch["id"], "base_branch_name": base_branch["name"],
+            "base_commit_id": base_branch["head_commit_id"],
+            "head_commit_id": branch["head_commit_id"],
+            "counts": counts, "changes": changes,
+        })
 
     add("/api/branches", ["GET"], "collaboration_list_branches", list_branches)
     add("/api/branches", ["POST"], "collaboration_create_branch", create_branch)
     add("/api/branches/<int:branch_id>", ["GET"], "collaboration_branch_detail", branch_detail)
     add("/api/branches/<int:branch_id>/commits", ["GET"],
         "collaboration_branch_commits", branch_commits)
+    add("/api/branches/<int:branch_id>/diff", ["GET"],
+        "collaboration_branch_diff", branch_diff)
     add("/api/branches/<int:branch_id>/commits", ["POST"],
         "collaboration_create_commit", create_commit)
     add("/api/commits/<int:commit_id>", ["GET"], "collaboration_commit_detail", commit_detail)
