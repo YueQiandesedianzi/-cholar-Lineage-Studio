@@ -8,6 +8,7 @@ import os
 import re
 import json
 import sqlite3
+import tempfile
 from datetime import datetime
 from urllib.parse import quote
 
@@ -21,6 +22,8 @@ DB_PATH = os.environ.get(
     "REVIEWGIT_DB",
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "reviewgit.db"),
 )
+SCHEMA_VERSION = 1
+BACKUP_MAX_BYTES = 64 * 1024 * 1024
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS papers (
@@ -89,10 +92,31 @@ def close_db(_exc=None):
         db.close()
 
 
+def schema_version(conn):
+    return conn.execute("PRAGMA user_version").fetchone()[0]
+
+
+def apply_migrations(conn):
+    """把数据库结构升到 SCHEMA_VERSION；结构变更时在这里追加迁移步骤。"""
+    current = schema_version(conn)
+    if current == SCHEMA_VERSION:
+        return current
+    if current > SCHEMA_VERSION:
+        raise RuntimeError(
+            "数据库结构版本 %d 高于本程序支持的 %d，请升级程序或改用其他数据库"
+            % (current, SCHEMA_VERSION)
+        )
+    # 版本 0 → 1：建表语句本身已用 IF NOT EXISTS，只需登记版本号
+    conn.execute("PRAGMA user_version = %d" % SCHEMA_VERSION)
+    conn.commit()
+    return SCHEMA_VERSION
+
+
 def init_db():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     conn.executescript(SCHEMA)
+    apply_migrations(conn)
     if conn.execute("SELECT COUNT(*) c FROM templates").fetchone()["c"] == 0:
         conn.execute(
             "INSERT INTO templates (name, schema_json, is_active) VALUES (?, ?, 1)",
@@ -139,6 +163,7 @@ def mock_extract(paper_text, fields):
 
 
 app = Flask(__name__)
+app.config["MAX_CONTENT_LENGTH"] = BACKUP_MAX_BYTES + 1024 * 1024  # 备份恢复上传上限
 app.teardown_appcontext(close_db)
 init_db()
 
@@ -381,6 +406,120 @@ def section_cards(sid):
         "JOIN papers p ON p.id = c.paper_id WHERE cs.section_id = ? ORDER BY c.id", (sid,)
     ).fetchall()
     return jsonify([dict(r) for r in rows])
+
+
+# ---------- 健康检查与备份 / 恢复 ----------
+
+OPTIONAL_TABLES = ("branches", "commits", "merge_requests", "tags", "audit_logs")
+REQUIRED_TABLES = ("papers", "templates", "cards", "sections", "card_sections")
+
+
+def _table_count(db, table):
+    try:
+        return db.execute("SELECT COUNT(*) c FROM %s" % table).fetchone()["c"]
+    except sqlite3.OperationalError:
+        return None
+
+
+@app.route("/api/health", methods=["GET"])
+def health():
+    db = get_db()
+    counts = {table: _table_count(db, table) for table in REQUIRED_TABLES + OPTIONAL_TABLES}
+    checks = []
+    writable = True
+    try:
+        db.execute("SAVEPOINT health_probe")
+        db.execute("ROLLBACK TO health_probe")
+        db.execute("RELEASE health_probe")
+    except sqlite3.Error:
+        writable = False
+    checks.append({"name": "数据库可写", "ok": writable, "severity": "error"})
+
+    bad_excerpts = 0
+    for row in db.execute(
+        "SELECT c.excerpt, COALESCE(p.full_text, p.abstract, '') AS source FROM cards c "
+        "JOIN papers p ON p.id = c.paper_id WHERE c.status = 'verified'"
+    ):
+        if not row["excerpt"] or row["excerpt"] not in row["source"]:
+            bad_excerpts += 1
+    checks.append({
+        "name": "已核验卡片摘录均为原文子串",
+        "ok": bad_excerpts == 0,
+        "severity": "error",
+        "detail": "" if bad_excerpts == 0 else "有 %d 张需复核" % bad_excerpts,
+    })
+    branches = counts.get("branches") or 0
+    checks.append({
+        "name": "协作历史已引导",
+        "ok": branches > 0,
+        "severity": "info",
+        "detail": ("已有 %d 个分支" % branches) if branches
+                  else "首次访问协作接口时会自动引导 main 根提交",
+    })
+    return jsonify({
+        "status": "ok" if all(item["ok"] for item in checks if item["severity"] == "error") else "warn",
+        "schema_version": schema_version(db),
+        "expected_schema_version": SCHEMA_VERSION,
+        "db_path": DB_PATH,
+        "counts": counts,
+        "checks": checks,
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+    })
+
+
+@app.route("/api/backup/db", methods=["GET"])
+def backup_db():
+    db = get_db()
+    handle = tempfile.NamedTemporaryFile(delete=False, suffix=".sqlite3")
+    handle.close()
+    target = sqlite3.connect(handle.name)
+    try:
+        db.backup(target)  # 一致性快照，包含 WAL 中未落盘的数据
+    finally:
+        target.close()
+    with open(handle.name, "rb") as source:
+        payload = source.read()
+    os.unlink(handle.name)
+    stamp = datetime.now().strftime("%Y%m%d-%H%M")
+    return _attachment(payload, "reviewgit-backup-%s.sqlite3" % stamp,
+                       "application/octet-stream")
+
+
+@app.route("/api/backup/restore", methods=["POST"])
+def restore_db():
+    upload = request.files.get("file")
+    if upload is None:
+        return jsonify({"error": "请以 form-data 上传字段名为 file 的 SQLite 文件"}), 400
+    raw = upload.read(BACKUP_MAX_BYTES + 1)
+    if len(raw) > BACKUP_MAX_BYTES:
+        return jsonify({"error": "文件超过 64 MB 上限"}), 413
+    if not raw.startswith(b"SQLite format 3\x00"):
+        return jsonify({"error": "这不是 SQLite 数据库文件（文件头不匹配）"}), 400
+
+    handle = tempfile.NamedTemporaryFile(delete=False, suffix=".sqlite3")
+    handle.write(raw)
+    handle.close()
+    source = sqlite3.connect(handle.name)
+    try:
+        tables = {row[0] for row in source.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'")}
+        missing = [name for name in REQUIRED_TABLES if name not in tables]
+        if missing:
+            return jsonify({"error": "备份缺少必要数据表：%s" % "、".join(missing)}), 400
+        db = get_db()
+        source.backup(db)  # 直接覆盖当前库，避免替换文件时句柄失效
+    except sqlite3.DatabaseError as exc:
+        return jsonify({"error": "备份文件无法读取：%s" % exc}), 400
+    finally:
+        source.close()
+        os.unlink(handle.name)
+
+    actor = (request.form.get("actor") or "").strip() or "未署名"
+    record_audit(db, actor, "db.restore", "database", None, {"bytes": len(raw),
+                                                             "source": upload.filename})
+    db.commit()
+    return jsonify({"ok": True, "bytes": len(raw),
+                    "counts": {table: _table_count(db, table) for table in REQUIRED_TABLES}})
 
 
 # ---------- 题录导入 ----------

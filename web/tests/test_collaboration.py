@@ -16,8 +16,10 @@
 
 import hashlib
 import importlib
+import io
 import json
 import os
+import sqlite3
 import sys
 import tempfile
 import unittest
@@ -1056,8 +1058,6 @@ class CollaborationApiTest(unittest.TestCase):
         self.assertEqual(self.get_branch(topic)["units"][unit_key]["content"], content)
 
     def test_card_field_and_block_create_update_delete_projection(self):
-        import sqlite3
-
         card = self.make_card("This source is exact for projection checks.", claim="projection")
         section = self.api_json("GET", "/api/sections")[0]
         main = self.main()
@@ -1510,6 +1510,99 @@ ER  -
         self.assertEqual(len(payload["cards"]), 1)
         self.assertEqual(payload["cards"][0]["id"], card_id)
         self.assertEqual(payload["papers"][0]["title"], "csv paper")
+
+    # ---------- 健康检查 / 备份恢复 ----------
+
+    def test_health_reports_schema_version_and_checks(self):
+        health = self.api_json("GET", "/api/health")
+        self.assertEqual(health["status"], "ok")
+        self.assertEqual(health["schema_version"], 1)
+        self.assertEqual(health["expected_schema_version"], 1)
+        self.assertIn("papers", health["counts"])
+        by_name = {item["name"]: item for item in health["checks"]}
+        self.assertIn("数据库可写", by_name)
+        self.assertIn("已核验卡片摘录均为原文子串", by_name)
+        self.assertTrue(by_name["数据库可写"]["ok"])
+        # 协作表已建但尚未引导 main：属提示级，不影响 status
+        self.assertEqual(health["counts"]["branches"], 0)
+        self.assertEqual(by_name["协作历史已引导"]["severity"], "info")
+        self.assertFalse(by_name["协作历史已引导"]["ok"])
+
+        with self.app_module.app.app_context():
+            version = self.app_module.schema_version(self.app_module.get_db())
+        self.assertEqual(version, 1)
+
+    def test_backup_download_and_restore_roundtrip(self):
+        excerpt = "Backup roundtrip sentence."
+        template_id = self.entity_id(
+            self.api_json("POST", "/api/templates", expected=201,
+                          json={"name": "备份模板", "fields": ["结论"]}),
+            "template",
+        )
+        self.api_json("POST", "/api/templates/%d/activate" % template_id)
+        paper_id = self.entity_id(
+            self.api_json("POST", "/api/papers", expected=201,
+                          json={"title": "backup paper", "abstract": excerpt}),
+            "paper",
+        )
+        self.api_json("POST", "/api/extract",
+                      json={"paper_id": paper_id, "template_id": template_id})
+
+        backup = self.client.get("/api/backup/db")
+        self.assertEqual(backup.status_code, 200)
+        raw = backup.get_data()
+        self.assertTrue(raw.startswith(b"SQLite format 3\x00"))
+        self.assertIn("attachment", backup.headers["Content-Disposition"])
+        self.assertIn("sqlite3", backup.headers["Content-Disposition"])
+
+        # 删掉文献后再用备份恢复，应回到备份时的状态
+        with self.app_module.app.app_context():
+            db = self.app_module.get_db()
+            db.execute("DELETE FROM cards")
+            db.execute("DELETE FROM papers")
+            db.commit()
+        self.assertEqual(self.api_json("GET", "/api/cards"), [])
+
+        restored = self.client.post(
+            "/api/backup/restore",
+            data={"file": (io.BytesIO(raw), "backup.sqlite3"), "actor": "恢复测试"},
+            content_type="multipart/form-data",
+        )
+        self.assertEqual(restored.status_code, 200)
+        body = json.loads(restored.get_data(as_text=True))
+        self.assertEqual(body["counts"]["papers"], 1)
+        self.assertEqual(len(self.api_json("GET", "/api/cards")), 1)
+
+        logs = self.api_json("GET", "/api/audit-logs?entity_type=database")
+        self.assertEqual(logs[0]["action"], "db.restore")
+        self.assertEqual(logs[0]["actor"], "恢复测试")
+
+        # 非 SQLite 文件必须被拒绝
+        bad = self.client.post(
+            "/api/backup/restore",
+            data={"file": (io.BytesIO(b"not a database"), "x.sqlite3")},
+            content_type="multipart/form-data",
+        )
+        self.assertEqual(bad.status_code, 400)
+        self.assertIn("SQLite", json.loads(bad.get_data(as_text=True))["error"])
+
+        # 缺少必要表的 SQLite 文件也要被拒绝
+        handle = tempfile.NamedTemporaryFile(delete=False, suffix=".sqlite3")
+        handle.close()
+        empty = sqlite3.connect(handle.name)
+        empty.execute("CREATE TABLE unrelated (x INTEGER)")
+        empty.commit()
+        empty.close()
+        with open(handle.name, "rb") as source:
+            payload = source.read()
+        os.unlink(handle.name)
+        incomplete = self.client.post(
+            "/api/backup/restore",
+            data={"file": (io.BytesIO(payload), "empty.sqlite3")},
+            content_type="multipart/form-data",
+        )
+        self.assertEqual(incomplete.status_code, 400)
+        self.assertIn("必要数据表", json.loads(incomplete.get_data(as_text=True))["error"])
 
 
 if __name__ == "__main__":

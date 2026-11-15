@@ -124,6 +124,8 @@ python scripts/launch.py --host 0.0.0.0  # 换监听地址（默认 127.0.0.1）
 **工程**
 
 - **导出交付**：Markdown 证据稿（章节树 + 已核验卡片 + 参考文献 + 未采用卡片清单）、CSV 证据表、结构化 JSON。**导出前自动校验**：已核验卡片的摘录必须是来源原文子串，不通过会阻止导出并列出问题卡片（可强制导出，稿首标注风险）。
+- **稳健与可诊断**：加载 / 空 / 错误三态统一，错误就地给出「重试」；`GET /api/health` 自检结构版本、实体计数与硬性检查；`GET /api/backup/db` 一键备份、`POST /api/backup/restore` 校验后恢复（都会写审计）。
+- **移动端与无障碍**：375px 宽度可用（长选项下拉不再撑破布局）；导航 `tablist` 语义、通知 `aria-live`、对话框焦点环、可见焦点样式、表单控件均有可访问名称。
 - **自包含、可移植**：运行时路径由 `__file__` 推导，可用 `REVIEWGIT_DB` 指向任意数据库；分发包不含数据库或缓存。
 - **零构建前端**：原生 HTML / CSS / JS 单页，无 npm、无构建步骤、无外部 CDN。
 
@@ -207,6 +209,9 @@ Content-Type: application/json
 | GET / POST | `/api/tags` | 标签列表 / 固定主干快照 |
 | GET | `/api/tags/<id>` | 标签对应的完整快照 |
 | GET | `/api/audit-logs` | 追加式审计记录（支持 `entity_type` / `entity_id` / `limit` 过滤） |
+| GET | `/api/health` | 自检：结构版本、实体计数、可写性与摘录校验 |
+| GET | `/api/backup/db` | 下载数据库一致性快照（SQLite 文件） |
+| POST | `/api/backup/restore` | 用上传的 SQLite 文件恢复（校验文件头与必要表，写审计） |
 
 常用审核请求：
 
@@ -335,7 +340,9 @@ python scripts/package.py --output-dir path/to/distribution
 | 想换一个独立的数据库 | 启动前设置 `REVIEWGIT_DB=/path/to/other.db`；启动器与 `seed.py` 会用同一路径 |
 | 「协作与版本」里没有分支 | 协作表在**首次访问协作接口时**创建，并以现有卡片与章节引导 `main` 根提交 |
 | 提取结果像是"复制了摘要句子" | 这是设计使然：Mock 提取器只从原文取逐字句子，用来验证摘录闸门；真实 LLM 尚未接入 |
-| 演示数据被我改乱了 | 用 `python scripts/launch.py --seed` 重建（会清空该数据库） |
+| 演示数据被我改乱了 | 用 `python scripts/launch.py --seed` 重建（会清空该数据库）；也可在「协作与版本 → 维护与诊断」里下载/恢复备份 |
+| 想确认库结构或数据是否正常 | 「协作与版本 → 维护与诊断 → 运行自检」，或直接访问 `GET /api/health` |
+| 窄屏（手机）布局错乱 | 已在 375px 宽度下验证；若自定了 CSS，注意给 flex 子项留 `min-width:0` |
 | 只在局域网/容器里访问 | `python scripts/launch.py --host 0.0.0.0`；但注意当前**没有鉴权**，不要暴露到公网 |
 
 ## 致谢与许可

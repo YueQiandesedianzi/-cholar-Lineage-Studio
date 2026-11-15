@@ -35,6 +35,9 @@
   .card { background:#fff; border:1px solid var(--line); border-radius:10px; padding:16px; margin-bottom:16px; }
   .card h2 { margin:0 0 12px; font-size:16px; }
   .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-bottom:10px; }
+  /* flex 子项默认 min-width:auto，会让长选项的 select 撑破窄屏；显式允许收缩 */
+  .row > * { min-width:0; }
+  select, input, textarea { max-width:100%; }
   input, textarea, select { border:1px solid #cbd5e1; border-radius:6px; padding:7px 10px; font-size:14px; font-family:inherit; }
   input[type=text], textarea { width:100%; }
   textarea { min-height:70px; resize:vertical; }
@@ -122,27 +125,60 @@
   .list-check input { margin-top:4px; }
   .result-list { margin:6px 0 0; padding-left:18px; }
   .result-list li { font-size:12px; color:#475569; margin:2px 0; }
+
+  /* 三态：加载 / 空 / 错误 */
+  .state-loading, .state-error, .state-empty { padding:14px; border-radius:8px; font-size:13px; }
+  .state-loading { background:#f1f5f9; color:#475569; }
+  .state-loading::before { content:"⏳ "; }
+  .state-empty { background:#f8fafc; color:#64748b; border:1px dashed var(--line); }
+  .state-error { background:#fef2f2; color:#991b1b; border:1px solid #fecaca; }
+  .state-error button { margin-left:8px; }
+
+  /* 无障碍：可见焦点与跳转链接 */
+  :focus-visible { outline:2px solid var(--blue); outline-offset:2px; border-radius:4px; }
+  .skip-link { position:absolute; left:-9999px; top:0; background:#fff; padding:8px 14px; z-index:100;
+               border:1px solid var(--blue); border-radius:0 0 8px 0; }
+  .skip-link:focus { left:0; }
+
+  /* 移动端 */
+  nav { overflow-x:auto; scrollbar-width:thin; }
+  nav button { white-space:nowrap; }
+  .scroll table { min-width:520px; }
+  @media (max-width:700px) {
+    header { flex-wrap:wrap; padding:12px 14px; gap:8px; }
+    header .identity { margin-left:0; width:100%; }
+    header .identity input { flex:1; width:auto; }
+    main { padding:12px 14px; }
+    .card { padding:12px; }
+    nav { padding:8px 12px; }
+    nav button { padding:8px 12px; }
+    button.primary, button.small { min-height:34px; }
+    .toolbar .row > * { flex:1 1 100%; }
+    .row select, .row input[type=text], .row textarea { width:100%; }
+    .chips { gap:6px; }
+  }
 </style>
 </head>
 <body>
+<a class="skip-link" href="#main">跳到主要内容</a>
 <header>
   <h1>Σcholar Lineage Studio</h1>
   <span class="tag">导入 → 提取 → 核验 → 框架 → 分支/审核/合并/版本 · AI 提取为 Mock</span>
   <span class="identity" title="用于提交作者 / 分支负责人 / 操作人；审核人单独填写">
     当前身份
-    <input id="me" placeholder="你的名字" autocomplete="off">
+    <input id="me" placeholder="你的名字" autocomplete="off" aria-label="当前身份（提交作者）">
   </span>
 </header>
-<nav>
-  <button data-tab="papers" class="active">文献</button>
-  <button data-tab="templates">提取模板</button>
-  <button data-tab="extract">提取与核验</button>
-  <button data-tab="outline">综述框架</button>
-  <button data-tab="collaboration">协作与版本</button>
+<nav role="tablist" aria-label="功能分区">
+  <button data-tab="papers" id="tab-papers" role="tab" aria-selected="true" aria-controls="papers" class="active">文献</button>
+  <button data-tab="templates" id="tab-templates" role="tab" aria-selected="false" aria-controls="templates">提取模板</button>
+  <button data-tab="extract" id="tab-extract" role="tab" aria-selected="false" aria-controls="extract">提取与核验</button>
+  <button data-tab="outline" id="tab-outline" role="tab" aria-selected="false" aria-controls="outline">综述框架</button>
+  <button data-tab="collaboration" id="tab-collaboration" role="tab" aria-selected="false" aria-controls="collaboration">协作与版本</button>
 </nav>
-<main>
+<main id="main" tabindex="-1">
   <!-- 文献 -->
-  <section id="papers" class="panel active">
+  <section id="papers" role="tabpanel" aria-labelledby="tab-papers" class="panel active">
     <div class="card">
       <h2>批量导入题录</h2>
       <div class="hint">支持 BibTeX / RIS 文本，或一行一个 DOI（勾选联网时用 Crossref 补全题录；取不到会列出来让你手工补全）。重复项按 DOI 或标题自动跳过，不会重复建库。</div>
@@ -156,7 +192,7 @@
         <input type="file" id="imp-file" accept=".bib,.ris,.txt" style="flex:0 0 auto" aria-label="选择题录文件">
         <button class="small" onclick="guard(loadImportFile)">读取文件</button>
       </div>
-      <textarea id="imp-text" placeholder="在此粘贴 BibTeX / RIS / DOI 列表…"></textarea>
+      <textarea id="imp-text" placeholder="在此粘贴 BibTeX / RIS / DOI 列表…" aria-label="题录文本（BibTeX / RIS / DOI 列表）"></textarea>
       <div class="row" style="margin-top:8px">
         <button class="primary" onclick="guard(importReferences)">导入</button>
         <button class="small" onclick="document.getElementById('imp-text').value = ''; document.getElementById('imp-result').innerHTML = '';">清空</button>
@@ -167,33 +203,33 @@
     <div class="card">
       <h2>导入文献（标题 + 摘要）</h2>
       <div class="hint">MVP 以"摘要"作为可抽取全文；摘录字段保证是摘要的真实子串。</div>
-      <div class="row"><input id="p-title" placeholder="标题"></div>
-      <div class="row"><input id="p-authors" placeholder="作者（可选）"><input id="p-year" placeholder="年份（可选）" style="width:120px"><input id="p-doi" placeholder="DOI（可选）" style="width:220px"></div>
-      <div class="row"><textarea id="p-abstract" placeholder="摘要正文"></textarea></div>
+      <div class="row"><input id="p-title" placeholder="标题" aria-label="文献标题"></div>
+      <div class="row"><input id="p-authors" placeholder="作者（可选）" aria-label="文献作者"><input id="p-year" placeholder="年份（可选）" style="width:120px" aria-label="文献年份"><input id="p-doi" placeholder="DOI（可选）" style="width:220px" aria-label="文献 DOI"></div>
+      <div class="row"><textarea id="p-abstract" placeholder="摘要正文" aria-label="文献摘要正文"></textarea></div>
       <div class="row"><button class="primary" onclick="addPaper()">导入</button></div>
     </div>
     <div class="card"><h2>文献列表</h2><div id="paper-list"></div></div>
   </section>
 
   <!-- 模板 -->
-  <section id="templates" class="panel">
+  <section id="templates" role="tabpanel" aria-labelledby="tab-templates" class="panel">
     <div class="card">
       <h2>新建提取模板</h2>
       <div class="hint">字段用逗号分隔，例如：研究问题, 方法, 样本量, 主要发现。模板可自定义、可切换生效。</div>
-      <div class="row"><input id="tpl-name" placeholder="模板名"></div>
-      <div class="row"><input id="tpl-fields" placeholder="字段（逗号分隔）"></div>
+      <div class="row"><input id="tpl-name" placeholder="模板名" aria-label="提取模板名称"></div>
+      <div class="row"><input id="tpl-fields" placeholder="字段（逗号分隔）" aria-label="模板字段，逗号分隔"></div>
       <div class="row"><button class="primary" onclick="addTemplate()">创建</button></div>
     </div>
     <div class="card"><h2>模板列表</h2><div id="tpl-list"></div></div>
   </section>
 
   <!-- 提取与核验 -->
-  <section id="extract" class="panel">
+  <section id="extract" role="tabpanel" aria-labelledby="tab-extract" class="panel">
     <div class="card">
       <h2>选择文献与模板并提取</h2>
       <div class="row">
-        <select id="e-paper" style="flex:1"></select>
-        <select id="e-template" style="flex:1"></select>
+        <select id="e-paper" style="flex:1" aria-label="选择要提取的文献"></select>
+        <select id="e-template" style="flex:1" aria-label="选择提取模板"></select>
         <button class="primary" onclick="runExtract()">提取证据卡片</button>
       </div>
     </div>
@@ -216,7 +252,7 @@
       <div class="toolbar">
         <div class="chips" id="card-stats"></div>
         <div class="row">
-          <input id="card-search" placeholder="搜索论断 / 摘录 / 文献标题…" style="flex:1;min-width:220px" autocomplete="off">
+          <input id="card-search" placeholder="搜索论断 / 摘录 / 文献标题…" style="flex:1;min-width:220px" autocomplete="off" aria-label="搜索证据卡片">
           <select id="card-filter-paper" aria-label="按文献筛选"></select>
           <select id="card-filter-field" aria-label="按字段筛选"></select>
           <select id="card-filter-section" aria-label="按章节挂载筛选"></select>
@@ -250,11 +286,11 @@
   </section>
 
   <!-- 综述框架 -->
-  <section id="outline" class="panel">
+  <section id="outline" role="tabpanel" aria-labelledby="tab-outline" class="panel">
     <div class="card">
       <h2>综述初步框架（章节树）</h2>
       <div class="row">
-        <input id="s-title" placeholder="新章节标题" style="flex:1">
+        <input id="s-title" placeholder="新章节标题" style="flex:1" aria-label="新章节标题">
         <button class="primary" onclick="addSection()">添加章节</button>
         <button class="small warn" onclick="suggestSections()">AI 建议框架</button>
       </div>
@@ -274,7 +310,7 @@
   </section>
 
   <!-- Git 式协作与版本 -->
-  <section id="collaboration" class="panel">
+  <section id="collaboration" role="tabpanel" aria-labelledby="tab-collaboration" class="panel">
     <div class="hint">ChangeUnit 保存字段级差异与完整不可变快照。分支提交不会提前改动主干，审核通过并合并后才更新主干卡片。删除与回滚均产生新提交，不抹除历史。</div>
     <div class="hint">本地单项目演示：作者与审核人是留痕文本，并非登录鉴权。合并主干时会检查「已核验」卡片的摘录确为论文原文子串。</div>
 
@@ -298,8 +334,8 @@
         <input id="g-author" value="协作者" placeholder="提交作者">
         <hr style="border:0;border-top:1px solid var(--line);margin:16px 0">
         <h2 style="font-size:14px">新建分支</h2>
-        <div class="row"><input id="g-new-name" placeholder="例如：zhangsan-methods"><select id="g-new-kind"><option value="person">个人</option><option value="topic">主题</option><option value="section">章节</option></select></div>
-        <div class="row"><input id="g-new-owner" value="张三" placeholder="负责人"><input id="g-new-purpose" placeholder="用途（必填）"></div>
+        <div class="row"><input id="g-new-name" placeholder="例如：zhangsan-methods" aria-label="分支名称"><select id="g-new-kind" aria-label="分支类型"><option value="person">个人</option><option value="topic">主题</option><option value="section">章节</option></select></div>
+        <div class="row"><input id="g-new-owner" value="张三" placeholder="负责人" aria-label="分支负责人"><input id="g-new-purpose" placeholder="用途（必填）" aria-label="分支用途"></div>
         <button class="primary" onclick="guard(createBranch)">从主干当前版本创建</button>
       </div>
 
@@ -342,8 +378,8 @@
       <div class="card" id="step-mr">
         <h2>步骤 3 · 发起合并请求</h2>
         <p class="muted">源分支使用步骤 1 选择的工作分支，默认目标为 main。</p>
-        <select id="g-target" style="width:100%;margin-bottom:10px"></select>
-        <input id="g-mr-title" placeholder="合并请求标题">
+        <select id="g-target" style="width:100%;margin-bottom:10px" aria-label="合并请求的目标分支"></select>
+        <input id="g-mr-title" placeholder="合并请求标题" aria-label="合并请求标题">
         <button class="primary" style="margin-top:10px" onclick="guard(openMergeRequest)">发起合并请求</button>
         <label class="field" for="g-mr-select">合并请求</label>
         <div class="row"><select id="g-mr-select" style="flex:1" onchange="guard(() => showMergeRequest())"></select><button class="small" onclick="guard(loadMergeRequests)">刷新</button></div>
@@ -363,7 +399,7 @@
           <input id="g-comment-unit" placeholder="点击上方变更条目自动填入">
           <button class="small" onclick="copyUnitKey('#g-comment-unit')">复制</button>
         </div>
-        <textarea id="g-comment-body" placeholder="定位到具体单元的意见（可选）"></textarea>
+        <textarea id="g-comment-body" placeholder="定位到具体单元的意见（可选）" aria-label="内联评论内容"></textarea>
         <div class="actions">
           <button class="small ok" onclick="guard(() => reviewMergeRequest('approve'))">批准</button>
           <button class="small warn" onclick="guard(() => reviewMergeRequest('request_changes'))">要求修改</button>
@@ -381,7 +417,7 @@
     </div>
 
     <div class="grid">
-      <div class="card"><h2>版本标签</h2><div class="row"><input id="g-tag-name" placeholder="v1.0"><input id="g-tag-author" value="项目负责人" placeholder="创建人"><button class="primary" onclick="guard(createTag)">标记主干当前版本</button></div><div id="g-tags"></div></div>
+      <div class="card"><h2>版本标签</h2><div class="row"><input id="g-tag-name" placeholder="v1.0" aria-label="版本标签名称"><input id="g-tag-author" value="项目负责人" placeholder="创建人" aria-label="版本标签创建人"><button class="primary" onclick="guard(createTag)">标记主干当前版本</button></div><div id="g-tags"></div></div>
       <div class="card"><h2>历史快照</h2><div id="g-tag-detail"><span class="muted">点击版本标签查看该提交的完整单元快照。</span></div></div>
     </div>
 
@@ -391,10 +427,24 @@
       <div class="row"><button class="small" onclick="guard(loadAuditTrail)">刷新留痕</button><span class="muted" id="g-audit-count"></span></div>
       <div id="g-audit" class="scroll"><span class="muted">尚未加载。</span></div>
     </div>
+
+    <div class="card" id="step-maintenance">
+      <h2>维护与诊断</h2>
+      <p class="muted">自检会报告数据库结构版本、实体计数与两条硬性检查（库可写、已核验摘录仍为原文子串）。备份是数据库的一致性快照；恢复会<strong>整体替换</strong>当前库。</p>
+      <div class="row">
+        <button class="small" onclick="guard(loadHealth)">运行自检</button>
+        <button class="small" onclick="guard(() => exportFile('/api/backup/db'))">下载数据库备份</button>
+      </div>
+      <div class="row">
+        <input type="file" id="restore-file" accept=".sqlite3,.db,.sqlite" aria-label="选择要恢复的 SQLite 备份文件">
+        <button class="small bad" onclick="guard(restoreBackup)">从备份恢复</button>
+      </div>
+      <div id="health-result" class="muted">点击「运行自检」查看结构版本、计数与检查项。</div>
+    </div>
   </section>
 </main>
 
-<div id="toasts"></div>
+<div id="toasts" role="status" aria-live="polite" aria-label="操作提示"></div>
 <div id="modal-root"></div>
 
 <script>
@@ -402,6 +452,26 @@ const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 
 // ---------------- 通知与对话框（替代 alert / confirm / prompt） ----------------
+// ---------------- 三态：加载 / 空 / 错误（带重试） ----------------
+function showLoading(selector, label) {
+  const el = $(selector);
+  if (el) el.innerHTML = `<div class="state-loading">正在加载${label ? '：' + esc(label) : ''}…</div>`;
+}
+function showInlineError(selector, message, retry) {
+  const el = $(selector);
+  if (!el) return;
+  el.innerHTML = `<div class="state-error"><b>加载失败</b>：${esc(message)}</div>`;
+  const box = el.querySelector('.state-error');
+  if (box) {
+    const button = document.createElement('button');
+    button.className = 'small';
+    button.textContent = '重试';
+    button.onclick = retry;
+    box.appendChild(button);
+  }
+}
+const emptyState = (message) => `<div class="state-empty">${esc(message)}</div>`;
+
 function notify(message, type = 'info') {
   const box = document.getElementById('toasts');
   const el = document.createElement('div');
@@ -442,7 +512,11 @@ function openModal({ title, body, input, confirmText = '确定', danger = false 
     mask.className = 'modal-mask';
     const modal = document.createElement('div');
     modal.className = 'modal';
+    modal.setAttribute('role', 'dialog');
+    modal.setAttribute('aria-modal', 'true');
+    modal.setAttribute('aria-labelledby', 'modal-title');
     const h = document.createElement('h3');
+    h.id = 'modal-title';
     h.textContent = title;
     const p = document.createElement('p');
     p.textContent = body || '';
@@ -472,7 +546,18 @@ function openModal({ title, body, input, confirmText = '确定', danger = false 
     mask.append(modal);
     mask.onclick = (event) => { if (event.target === mask) finish(null); };
     root.append(mask);
-    root.onkeydown = (event) => { if (event.key === 'Escape') finish(null); };
+    root.onkeydown = (event) => {
+      if (event.key === 'Escape') { finish(null); return; }
+      if (event.key !== 'Tab') return;
+      // 简单焦点环：把 Tab 限制在对话框内
+      const focusables = [...modal.querySelectorAll('button, input, textarea, select')]
+        .filter(node => !node.disabled);
+      if (!focusables.length) return;
+      const first = focusables[0];
+      const last = focusables[focusables.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    };
     (field || ok).focus();
   });
 }
@@ -536,9 +621,13 @@ function bindIdentities() {
 
 // tabs
 document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
-  document.querySelectorAll('nav button').forEach(x => x.classList.remove('active'));
+  document.querySelectorAll('nav button').forEach(x => {
+    x.classList.remove('active');
+    x.setAttribute('aria-selected', 'false');
+  });
   document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
   b.classList.add('active');
+  b.setAttribute('aria-selected', 'true');
   $('#' + b.dataset.tab).classList.add('active');
   if (b.dataset.tab === 'papers') guard(loadPapers);
   if (b.dataset.tab === 'templates') guard(loadTemplates);
@@ -557,11 +646,19 @@ async function api(path, opts = {}) {
 // ---- 文献 ----
 const paperState = { papers: [] };
 async function loadPapers() {
-  const ps = await api('/api/papers');
+  showLoading('#paper-list', '文献');
+  let ps;
+  try {
+    ps = await api('/api/papers');
+  } catch (e) {
+    showInlineError('#paper-list', e.message, () => guard(loadPapers));
+    throw e;
+  }
   paperState.papers = ps;
   $('#paper-list').innerHTML = ps.length ? ps.map(p => `
     <div class="section-item"><span class="title"><b>#${p.id}</b> ${esc(p.title)}</span>
-      <span class="muted">${esc(p.year || '')}${p.doi ? ' · ' + esc(p.doi) : ''}</span></div>`).join('') : '<span class="muted">暂无文献。</span>';
+      <span class="muted">${esc(p.year || '')}${p.doi ? ' · ' + esc(p.doi) : ''}</span></div>`).join('')
+    : emptyState('暂无文献；可在上方导入 BibTeX / RIS / DOI，或手工录入一篇。');
   const sel = $('#e-paper');
   sel.innerHTML = ps.map(p => `<option value="${p.id}">#${p.id} ${esc(p.title)}</option>`).join('');
   const bulkTemplate = $('#bx-template');
@@ -632,13 +729,20 @@ async function addPaper() {
 
 // ---- 模板 ----
 async function loadTemplates() {
-  const ts = await api('/api/templates');
+  showLoading('#tpl-list', '模板');
+  let ts;
+  try {
+    ts = await api('/api/templates');
+  } catch (e) {
+    showInlineError('#tpl-list', e.message, () => guard(loadTemplates));
+    throw e;
+  }
   $('#tpl-list').innerHTML = ts.length ? ts.map(t => `
     <div class="section-item">
       <span class="title"><b>${esc(t.name)}</b> ${t.is_active ? '<span class="badge verified">生效中</span>' : ''}
         <span class="muted">字段：${esc(t.schema.fields.map(f=>f.name).join('、'))}</span></span>
       ${!t.is_active ? `<button class="small" onclick="activateTpl(${t.id})">设为生效</button>` : ''}
-    </div>`).join('') : '<span class="muted">暂无模板。</span>';
+    </div>`).join('') : emptyState('暂无模板；创建后即可按字段抽取证据卡片。');
   $('#e-template').innerHTML = ts.map(t => `<option value="${t.id}">${esc(t.name)}${t.is_active?'（生效）':''}</option>`).join('');
 }
 async function addTemplate() {
@@ -742,7 +846,14 @@ const statusLabel = (status) => STATUS_LABELS[status] || status;
 const VERIFY_LABELS = { approve: '通过', reject: '驳回', revise: '修订并核验', reset: '退回待核验' };
 
 async function loadCards() {
-  const [cs, secs] = await Promise.all([api('/api/cards'), api('/api/sections')]);
+  showLoading('#card-list', '证据卡片');
+  let cs, secs;
+  try {
+    [cs, secs] = await Promise.all([api('/api/cards'), api('/api/sections')]);
+  } catch (e) {
+    showInlineError('#card-list', e.message, () => guard(loadCards));
+    throw e;
+  }
   cardState.cards = cs;
   cardState.sections = secs;
   // 已删除或已被过滤掉的卡片不再保留勾选
@@ -861,7 +972,7 @@ function renderCards() {
   const slice = list.slice(start, start + cardState.pageSize);
   $('#card-list').innerHTML = list.length
     ? slice.map((c, i) => cardMarkup(c, start + i)).join('')
-    : '<span class="muted">没有符合条件的卡片；可点击「清空条件」查看全部。</span>';
+    : emptyState(all.length ? '没有符合条件的卡片；可点击「清空条件」查看全部。' : '还没有证据卡片；先在「文献」页导入题录，再用上方按钮提取。');
   $('#card-pager').innerHTML = list.length > cardState.pageSize
     ? `<button class="small" onclick="gotoCardPage(${cardState.page - 1})" ${cardState.page <= 1 ? 'disabled' : ''}>上一页</button>
        <span class="muted">第 ${cardState.page} / ${pages} 页 · 共 ${list.length} 张</span>
@@ -1106,14 +1217,21 @@ function bindCardToolbar() {
 
 // ---- 框架 ----
 async function loadSections() {
-  const ss = await api('/api/sections');
+  showLoading('#section-list', '章节');
+  let ss;
+  try {
+    ss = await api('/api/sections');
+  } catch (e) {
+    showInlineError('#section-list', e.message, () => guard(loadSections));
+    throw e;
+  }
   $('#section-list').innerHTML = ss.length ? ss.map(s => `
     <div class="section-item">
       <span class="title">#${s.id} ${esc(s.title)}</span>
       <button class="small" onclick="showSectionCards(${s.id})">查看卡片</button>
       <button class="small" onclick="renameSection(${s.id})">重命名</button>
       <button class="small bad" onclick="deleteSection(${s.id})">删除</button>
-    </div>`).join('') : '<span class="muted">暂无章节，可点击"AI 建议框架"生成默认骨架。</span>';
+    </div>`).join('') : emptyState('暂无章节，可点击「AI 建议框架」生成默认骨架。');
 }
 async function addSection() {
   try {
@@ -1236,7 +1354,7 @@ async function exportMarkdown(force = false) {
 }
 function renderExportProblems(data) {
   $('#export-result').innerHTML = `<div class="hint">${esc(data.error)}<br>${esc(data.hint || '')}</div>
-    <table><tr><th>卡片</th><th>字段</th><th>摘录</th><th>处理</th></tr>
+    <table><tr><th scope="col">卡片</th><th scope="col">字段</th><th scope="col">摘录</th><th scope="col">处理</th></tr>
     ${data.problems.map(item => `<tr><td>#${item.card_id}</td><td>${esc(item.field)}</td>
       <td>${esc(String(item.excerpt).slice(0, 60))}</td>
       <td><button class="small" onclick="goFixCard(${item.card_id})">去修正</button></td></tr>`).join('')}
@@ -1259,7 +1377,18 @@ function goFixCard(id) {
 // ---- 协作与版本（数据库 ChangeUnit，不依赖 Git 命令） ----
 const collab = { branches: [], branchId: null, units: {}, mr: null, branchCommits: [], nextStep: null };
 async function guard(fn) {
-  try { return await fn(); } catch (e) { notify(e.message || String(e), 'error'); console.error(e); }
+  try {
+    return await fn();
+  } catch (e) {
+    const message = e && e.message ? e.message : String(e);
+    const toast = notify(message, 'error');
+    const retry = document.createElement('button');
+    retry.textContent = '重试';
+    retry.title = '重新执行刚才失败的操作';
+    retry.onclick = () => { toast.remove(); guard(fn); };
+    toast.insertBefore(retry, toast.lastChild);
+    console.error(e);
+  }
 }
 const fmt = value => value === null || value === undefined ? '（不存在 / 删除）' :
   (typeof value === 'string' ? value : JSON.stringify(value, null, 2));
@@ -1276,7 +1405,13 @@ function branchName(id) {
 function mainBranch() { return collab.branches.find(b => b.name === 'main'); }
 
 async function loadCollaboration() {
-  collab.branches = await api('/api/branches');
+  showLoading('#wizard-steps', '协作状态');
+  try {
+    collab.branches = await api('/api/branches');
+  } catch (e) {
+    showInlineError('#wizard-steps', e.message, () => guard(loadCollaboration));
+    throw e;
+  }
   if (!collab.branches.length) throw new Error('协作引擎未初始化主干');
   if (!collab.branches.some(b => b.id === collab.branchId)) {
     const main = mainBranch();
@@ -1396,6 +1531,54 @@ async function refreshWizard() {
   notify('已刷新协作状态', 'success');
 }
 
+// ---- 维护与诊断 ----
+async function loadHealth() {
+  const box = $('#health-result');
+  box.innerHTML = '<div class="state-loading">正在自检…</div>';
+  let health;
+  try {
+    health = await api('/api/health');
+  } catch (e) {
+    showInlineError('#health-result', e.message, () => guard(loadHealth));
+    throw e;
+  }
+  const counts = health.counts || {};
+  const rows = ['papers', 'cards', 'sections', 'branches', 'commits', 'audit_logs']
+    .filter(key => counts[key] !== undefined)
+    .map(key => `  · ${key}: ${counts[key] === null ? '（尚未创建）' : counts[key]}`).join('\n');
+  box.innerHTML = `<div class="hint">
+    <b>状态：${esc(health.status === 'ok' ? '正常' : '需要留意')}</b>　·　结构版本 ${health.schema_version}/${health.expected_schema_version}
+    <div class="muted">数据库：${esc(health.db_path)}</div>
+    <pre class="code">${esc(rows)}</pre>
+    <ul class="result-list">${health.checks.map(item =>
+      `<li>${item.ok ? '✅' : (item.severity === 'error' ? '❌' : 'ℹ️')} ${esc(item.name)}${item.detail ? ' —— ' + esc(item.detail) : ''}</li>`).join('')}</ul>
+  </div>`;
+  notify(health.status === 'ok' ? '自检完成：全部硬性检查通过' : '自检完成：有项目需要留意',
+    health.status === 'ok' ? 'success' : 'info');
+}
+async function restoreBackup() {
+  const input = $('#restore-file');
+  if (!input.files || !input.files[0]) { notify('请先选择备份文件（.sqlite3 / .db）', 'info'); return; }
+  const file = input.files[0];
+  const ok = await confirmAction('从备份恢复数据库',
+    `将用「${file.name}」（${Math.max(1, Math.round(file.size / 1024))} KB）整体替换当前数据库。\n` +
+    '当前库中的文献、卡片、章节与协作历史都会被覆盖，且不可撤销。建议先「下载数据库备份」。',
+    '确认恢复', true);
+  if (!ok) return;
+  const form = new FormData();
+  form.append('file', file);
+  form.append('actor', $('#me').value.trim() || '未署名');
+  const response = await fetch('/api/backup/restore', { method: 'POST', body: form });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || ('恢复失败：HTTP ' + response.status));
+  input.value = '';
+  const counts = Object.entries(data.counts || {}).map(([key, value]) => `${key} ${value}`).join(' · ');
+  $('#health-result').innerHTML = `<div class="hint">恢复完成：${esc(counts)}</div>`;
+  notify('已从备份恢复数据库', 'success');
+  await Promise.all([loadPapers(), loadTemplates(), loadCards(), loadSections()]);
+  guard(loadCollaboration);
+}
+
 // ---- 核验与挂载留痕 ----
 async function loadAuditTrail() {
   const logs = await api('/api/audit-logs?limit=20');
@@ -1463,16 +1646,16 @@ function renderCommitPicker() {
   if (kind === 'card_status') {
     const options = ['pending', 'verified', 'rejected'];
     editor.innerHTML = `<label class="field">新的核验状态</label>
-      <select id="g-commit-value" style="width:100%">
+      <select id="g-commit-value" style="width:100%" aria-label="新的核验状态">
         ${options.map(s => `<option value="${s}" ${unit.content === s ? 'selected' : ''}>${statusLabel(s)}</option>`).join('')}
       </select>
       <p class="muted">当前：${statusLabel(unit.content)}</p>`;
   } else if (kind === 'structure') {
     editor.innerHTML = `<label class="field">新的章节标题</label>
-      <input id="g-commit-value" value="${esc(unit.content && unit.content.title || '')}">`;
+      <input id="g-commit-value" aria-label="新的章节标题" value="${esc(unit.content && unit.content.title || '')}">`;
   } else {
     editor.innerHTML = `<label class="field">新的论断</label>
-      <textarea id="g-commit-value">${esc(unit.content || '')}</textarea>
+      <textarea id="g-commit-value" aria-label="新的论断">${esc(unit.content || '')}</textarea>
       <div class="diff-preview" id="g-commit-diff"></div>`;
     const input = $('#g-commit-value');
     input.addEventListener('input', () => {
@@ -1666,7 +1849,7 @@ function conflictCard(c) {
     ? `<div class="muted">解决人：${esc(c.resolved_by)} · 结果：${esc(fmt(c.resolved_content))}</div>`
     : `<div class="muted">三种处理方式的结果预览：</div>
        <table>
-         <tr><th>选项</th><th>合并后该单元的值</th></tr>
+         <tr><th scope="col">选项</th><th scope="col">合并后该单元的值</th></tr>
          <tr><td>保留目标</td><td><pre class="code">${esc(fmt(c.ours_content))}</pre></td></tr>
          <tr><td>保留来源</td><td><pre class="code">${esc(fmt(c.theirs_content))}</pre></td></tr>
          <tr><td>手工内容</td><td><pre class="code" id="g-manual-preview-${c.id}">${esc(fmt(c.theirs_content))}</pre></td></tr>
@@ -1793,7 +1976,7 @@ async function createTag() {
 }
 async function loadTags() {
   const ts = await api('/api/tags');
-  $('#g-tags').innerHTML = ts.length ? '<table><tr><th>标签</th><th>提交</th><th>创建时间</th></tr>' + ts.map(t =>
+  $('#g-tags').innerHTML = ts.length ? '<table><tr><th scope="col">标签</th><th scope="col">提交</th><th scope="col">创建时间</th></tr>' + ts.map(t =>
     `<tr><td><button class="small" onclick="guard(() => showTag(${t.id}))">${esc(t.name)}</button></td><td>#${t.commit_id}</td><td>${shortTime(t.created_at)}</td></tr>`).join('') + '</table>' : '<span class="muted">尚无版本标签。</span>';
 }
 async function showTag(id) {
